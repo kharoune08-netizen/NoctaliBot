@@ -125,6 +125,38 @@ async def reglement(ctx):
     await ctx.send(embed=embed)
     await ctx.message.delete()
 
+from discord.ext import tasks
+
+MUDAE_CHANNEL_ID = 1492299644321923152  
+
+@tasks.loop(hours=1)
+async def rappel_mudae():
+    channel = bot.get_channel(MUDAE_CHANNEL_ID)
+    if channel:
+        embed = discord.Embed(
+            title="🎮 C'est l'heure de Mudae !",
+            description=(
+                "**Commandes pour invoquer :**\n"
+                "`$w` → Invoquer une waifu\n"
+                "`$h` → Invoquer un husbando\n"
+                "`$wa` → Invoquer 4 waifus\n"
+                "`$ha` → Invoquer 4 husbandos\n\n"
+                "**Commandes utiles :**\n"
+                "`$tu` → Voir ton délai restant\n"
+                "`$marry` → Voir tes personnages\n"
+                "`$dk` → Voir tes dés disponibles\n"
+                "`$rt` → Reset ton délai (si dispo)\n\n"
+                "⏰ Rappel toutes les heures !"
+            ),
+            color=discord.Color.purple()
+        )
+        await channel.send(embed=embed)
+
+@bot.event
+async def on_ready():
+    print(f"✅ {bot.user} est en ligne !")
+    rappel_mudae.start()
+
 
 @bot.event
 async def on_ready():
