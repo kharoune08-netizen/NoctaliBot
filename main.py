@@ -101,6 +101,30 @@ async def setup(ctx):
     )
     await ctx.send(embed=embed, view=SetupView())
 
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def reglement(ctx):
+    embed = discord.Embed(
+        title="📖 Règlement du serveur",
+        description=(
+            "Bienvenue sur le serveur ! Merci de respecter les règles suivantes :\n\n"
+            "**1️⃣ Respectez tout le monde**\n"
+            "Aucune insulte, discrimination ou harcèlement ne sera toléré.\n\n"
+            "**2️⃣ Pas de spam**\n"
+            "Évitez les messages répétitifs ou les mentions abusives.\n\n"
+            "**3️⃣ Pas de pub**\n"
+            "Aucun lien ou invitation Discord sans autorisation d'un admin.\n\n"
+            "**4️⃣ Contenu approprié**\n"
+            "Pas de contenu NSFW en dehors des salons prévus.\n\n"
+            "**5️⃣ Respectez les salons**\n"
+            "Chaque salon a un sujet, restez dans le thème.\n\n"
+            "En restant sur ce serveur vous acceptez ces règles. ✅"
+        ),
+        color=discord.Color.purple()
+    )
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
 
 @bot.event
 async def on_ready():
