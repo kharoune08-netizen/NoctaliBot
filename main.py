@@ -12,6 +12,7 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 ROLES_LOL = ["Top", "Jungle", "Mid", "ADC", "Support"]
+PERM_ROLE = "Noctali Bot Perm"
 
 # ===== PARTICIPANTS =====
 
@@ -60,6 +61,9 @@ def set_last_daily(user_id, date):
         data[str(user_id)] = {}
     data[str(user_id)]["last_daily"] = date
     save_economy(data)
+
+def has_perm(user):
+    return discord.utils.get(user.roles, name=PERM_ROLE) is not None
 
 # ===== MENUS ROLES =====
 
@@ -203,6 +207,9 @@ class RetirerSelect(discord.ui.Select):
         super().__init__(placeholder="Choisir un joueur à retirer...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
+        if not has_perm(interaction.user):
+            await interaction.response.send_message("❌ T'as pas la permission !", ephemeral=True)
+            return
         participants = load_participants()
         pseudo = self.values[0]
         participants = [p for p in participants if p["pseudo"] != pseudo]
@@ -247,6 +254,9 @@ class RerollView(discord.ui.View):
 
     @discord.ui.button(label="🎲 Reroll les rôles", style=discord.ButtonStyle.blurple)
     async def reroll_roles(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not has_perm(interaction.user):
+            await interaction.response.send_message("❌ T'as pas la permission !", ephemeral=True)
+            return
         def format_equipe(equipe):
             roles = ROLES_LOL.copy()
             random.shuffle(roles)
@@ -258,6 +268,9 @@ class RerollView(discord.ui.View):
 
     @discord.ui.button(label="🔄 Reroll les équipes", style=discord.ButtonStyle.red)
     async def reroll_equipes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not has_perm(interaction.user):
+            await interaction.response.send_message("❌ T'as pas la permission !", ephemeral=True)
+            return
         tous = self.equipe1 + self.equipe2
         random.shuffle(tous)
         self.equipe1 = tous[:5]
@@ -302,8 +315,8 @@ class JoindreView(discord.ui.View):
 
     @discord.ui.button(label="🗑️ Reset la liste", style=discord.ButtonStyle.red)
     async def reset_liste(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Réservé aux admins !", ephemeral=True)
+        if not has_perm(interaction.user):
+            await interaction.response.send_message("❌ T'as pas la permission !", ephemeral=True)
             return
         save_participants([])
         await interaction.response.send_message("✅ Liste réinitialisée !", ephemeral=True)
@@ -320,7 +333,7 @@ class JoindreView(discord.ui.View):
 @commands.has_permissions(administrator=True)
 async def partiepersso(ctx):
     save_participants([])
-    msg = await ctx.send(embed=build_embed(), view=JoindreView())
+    await ctx.send(embed=build_embed(), view=JoindreView())
     await ctx.message.delete()
 
 @bot.command()
