@@ -1,5 +1,7 @@
 import discord
 from discord.ext import commands
+import random
+import os
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -7,7 +9,11 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== MENUS =====
+ROLES_LOL = ["Top", "Jungle", "Mid", "ADC", "Support"]
+participants = []
+partie_message = None
+
+# ===== MENUS ROLES =====
 
 class GenreSelect(discord.ui.Select):
     def __init__(self):
@@ -22,14 +28,9 @@ class GenreSelect(discord.ui.Select):
         role = discord.utils.get(interaction.guild.roles, name=self.values[0])
         if role:
             await interaction.user.add_roles(role)
-            await interaction.response.send_message(
-                f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True
-            )
+            await interaction.response.send_message(f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True)
         else:
-            await interaction.response.send_message(
-                f"❌ Le rôle **{self.values[0]}** n'existe pas sur le serveur.", ephemeral=True
-            )
-
+            await interaction.response.send_message(f"❌ Le rôle **{self.values[0]}** n'existe pas sur le serveur.", ephemeral=True)
 
 class AgeSelect(discord.ui.Select):
     def __init__(self):
@@ -45,14 +46,9 @@ class AgeSelect(discord.ui.Select):
         role = discord.utils.get(interaction.guild.roles, name=self.values[0])
         if role:
             await interaction.user.add_roles(role)
-            await interaction.response.send_message(
-                f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True
-            )
+            await interaction.response.send_message(f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True)
         else:
-            await interaction.response.send_message(
-                f"❌ Le rôle **{self.values[0]}** n'existe pas.", ephemeral=True
-            )
-
+            await interaction.response.send_message(f"❌ Le rôle **{self.values[0]}** n'existe pas.", ephemeral=True)
 
 class SituationSelect(discord.ui.Select):
     def __init__(self):
@@ -67,14 +63,9 @@ class SituationSelect(discord.ui.Select):
         role = discord.utils.get(interaction.guild.roles, name=self.values[0])
         if role:
             await interaction.user.add_roles(role)
-            await interaction.response.send_message(
-                f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True
-            )
+            await interaction.response.send_message(f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True)
         else:
-            await interaction.response.send_message(
-                f"❌ Le rôle **{self.values[0]}** n'existe pas.", ephemeral=True
-            )
-
+            await interaction.response.send_message(f"❌ Le rôle **{self.values[0]}** n'existe pas.", ephemeral=True)
 
 class SetupView(discord.ui.View):
     def __init__(self):
@@ -82,9 +73,6 @@ class SetupView(discord.ui.View):
         self.add_item(GenreSelect())
         self.add_item(AgeSelect())
         self.add_item(SituationSelect())
-
-
-# ===== COMMANDE =====
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -100,6 +88,8 @@ async def setup(ctx):
         color=discord.Color.purple()
     )
     await ctx.send(embed=embed, view=SetupView())
+
+# ===== REGLEMENT =====
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -125,43 +115,21 @@ async def reglement(ctx):
     await ctx.send(embed=embed)
     await ctx.message.delete()
 
-from discord.ext import tasks
+# ===== PARTIE PERSO LOL =====
 
-MUDAE_CHANNEL_ID = 1492299644321923152  
-
-@tasks.loop(hours=1)
-async def rappel_mudae():
-    channel = bot.get_channel(MUDAE_CHANNEL_ID)
-    if channel:
-        embed = discord.Embed(
-            title="🎮 C'est l'heure de Mudae !",
-            description=(
-                "**Commandes pour invoquer :**\n"
-                "`$w` → Invoquer une waifu\n"
-                "`$h` → Invoquer un husbando\n"
-                "`$wa` → Invoquer 4 waifus\n"
-                "`$ha` → Invoquer 4 husbandos\n\n"
-                "**Commandes utiles :**\n"
-                "`$tu` → Voir ton délai restant\n"
-                "`$marry` → Voir tes personnages\n"
-                "`$dk` → Voir tes dés disponibles\n"
-                "`$rt` → Reset ton délai (si dispo)\n\n"
-                "⏰ Rappel toutes les heures !"
-            ),
-            color=discord.Color.purple()
-        )
-        await channel.send(embed=embed)
-
-@bot.event
-async def on_ready():
-    print(f"✅ {bot.user} est en ligne !")
-    rappel_mudae.start()
-
-import random
-
-ROLES_LOL = ["Top", "Jungle", "Mid", "ADC", "Support"]
-
-participants = []
+def build_embed():
+    liste = "\n".join(f"**{i+1}.** {p['pseudo']}" for i, p in enumerate(participants)) if participants else "*Aucun participant pour l'instant*"
+    embed = discord.Embed(
+        title="🎮 Partie Personnalisée League of Legends",
+        description=(
+            "Une partie personnalisée est en cours d'organisation !\n\n"
+            "Clique sur **Je veux participer** pour rejoindre et entre ton pseudo LoL.\n\n"
+            f"👥 **{len(participants)}/10** joueurs inscrits\n\n"
+            f"**Liste des participants :**\n{liste}"
+        ),
+        color=discord.Color.blue()
+    )
+    return embed
 
 class ParticipantModal(discord.ui.Modal, title="Rejoindre la partie"):
     pseudo = discord.ui.TextInput(
@@ -171,59 +139,68 @@ class ParticipantModal(discord.ui.Modal, title="Rejoindre la partie"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        global participants
+        global participants, partie_message
         pseudo = self.pseudo.value
 
-        # Vérifie si déjà inscrit
-        if any(p["pseudo"] == pseudo for p in participants):
-            await interaction.response.send_message(
-                f"❌ **{pseudo}** est déjà inscrit !", ephemeral=True
-            )
+        if any(p["pseudo"].lower() == pseudo.lower() for p in participants):
+            await interaction.response.send_message(f"❌ **{pseudo}** est déjà inscrit !", ephemeral=True)
+            return
+
+        if len(participants) >= 10:
+            await interaction.response.send_message("❌ La partie est déjà complète !", ephemeral=True)
             return
 
         participants.append({"user": interaction.user, "pseudo": pseudo})
-        await interaction.response.send_message(
-            f"✅ **{pseudo}** a rejoint la partie ! ({len(participants)}/10)",
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"✅ **{pseudo}** a rejoint la partie !", ephemeral=True)
+
+        if partie_message:
+            await partie_message.edit(embed=build_embed(), view=JoindreView())
 
         if len(participants) == 10:
             await lancer_partie(interaction)
 
+class RetirerSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=p["pseudo"], value=p["pseudo"])
+            for p in participants
+        ]
+        super().__init__(placeholder="Choisir un joueur à retirer...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        global participants, partie_message
+        pseudo = self.values[0]
+        participants = [p for p in participants if p["pseudo"] != pseudo]
+        await interaction.response.send_message(f"🗑️ **{pseudo}** a été retiré de la liste !", ephemeral=True)
+        if partie_message:
+            await partie_message.edit(embed=build_embed(), view=JoindreView())
+
+class RetirerView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(RetirerSelect())
+
 async def lancer_partie(interaction: discord.Interaction):
     global participants
     random.shuffle(participants)
-
     equipe1 = participants[:5]
     equipe2 = participants[5:]
-    roles = ROLES_LOL.copy()
 
     def format_equipe(equipe):
+        roles = ROLES_LOL.copy()
         random.shuffle(roles)
-        return "\n".join(
-            f"**{roles[i]}** → {p['pseudo']}"
-            for i, p in enumerate(equipe)
-        )
+        return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
 
     embed = discord.Embed(
         title="⚔️ Partie Personnalisée — Les équipes sont prêtes !",
         color=discord.Color.gold()
     )
-    embed.add_field(
-        name="🔵 Équipe 1",
-        value=format_equipe(equipe1),
-        inline=True
-    )
-    embed.add_field(
-        name="🔴 Équipe 2",
-        value=format_equipe(equipe2),
-        inline=True
-    )
+    embed.add_field(name="🔵 Équipe 1", value=format_equipe(equipe1), inline=True)
+    embed.add_field(name="🔴 Équipe 2", value=format_equipe(equipe2), inline=True)
 
     view = RerollView(equipe1, equipe2)
     await interaction.channel.send(embed=embed, view=view)
     participants = []
-
 
 class RerollView(discord.ui.View):
     def __init__(self, equipe1, equipe2):
@@ -232,30 +209,15 @@ class RerollView(discord.ui.View):
         self.equipe2 = equipe2
 
     @discord.ui.button(label="🎲 Reroll les rôles", style=discord.ButtonStyle.blurple)
-    async def reroll(self, interaction: discord.Interaction, button: discord.ui.Button):
-        roles = ROLES_LOL.copy()
-
+    async def reroll_roles(self, interaction: discord.Interaction, button: discord.ui.Button):
         def format_equipe(equipe):
+            roles = ROLES_LOL.copy()
             random.shuffle(roles)
-            return "\n".join(
-                f"**{roles[i]}** → {p['pseudo']}"
-                for i, p in enumerate(equipe)
-            )
+            return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
 
-        embed = discord.Embed(
-            title="⚔️ Partie Personnalisée — Rôles rerollés !",
-            color=discord.Color.gold()
-        )
-        embed.add_field(
-            name="🔵 Équipe 1",
-            value=format_equipe(self.equipe1),
-            inline=True
-        )
-        embed.add_field(
-            name="🔴 Équipe 2",
-            value=format_equipe(self.equipe2),
-            inline=True
-        )
+        embed = discord.Embed(title="⚔️ Partie Personnalisée — Rôles rerollés !", color=discord.Color.gold())
+        embed.add_field(name="🔵 Équipe 1", value=format_equipe(self.equipe1), inline=True)
+        embed.add_field(name="🔴 Équipe 2", value=format_equipe(self.equipe2), inline=True)
         await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="🔄 Reroll les équipes", style=discord.ButtonStyle.red)
@@ -264,31 +226,16 @@ class RerollView(discord.ui.View):
         random.shuffle(tous)
         self.equipe1 = tous[:5]
         self.equipe2 = tous[5:]
-        roles = ROLES_LOL.copy()
 
         def format_equipe(equipe):
+            roles = ROLES_LOL.copy()
             random.shuffle(roles)
-            return "\n".join(
-                f"**{roles[i]}** → {p['pseudo']}"
-                for i, p in enumerate(equipe)
-            )
+            return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
 
-        embed = discord.Embed(
-            title="⚔️ Partie Personnalisée — Équipes rerollées !",
-            color=discord.Color.gold()
-        )
-        embed.add_field(
-            name="🔵 Équipe 1",
-            value=format_equipe(self.equipe1),
-            inline=True
-        )
-        embed.add_field(
-            name="🔴 Équipe 2",
-            value=format_equipe(self.equipe2),
-            inline=True
-        )
+        embed = discord.Embed(title="⚔️ Partie Personnalisée — Équipes rerollées !", color=discord.Color.gold())
+        embed.add_field(name="🔵 Équipe 1", value=format_equipe(self.equipe1), inline=True)
+        embed.add_field(name="🔴 Équipe 2", value=format_equipe(self.equipe2), inline=True)
         await interaction.response.edit_message(embed=embed, view=self)
-
 
 class JoindreView(discord.ui.View):
     def __init__(self):
@@ -297,35 +244,44 @@ class JoindreView(discord.ui.View):
     @discord.ui.button(label="⚔️ Je veux participer !", style=discord.ButtonStyle.green)
     async def rejoindre(self, interaction: discord.Interaction, button: discord.ui.Button):
         if len(participants) >= 10:
-            await interaction.response.send_message(
-                "❌ La partie est déjà complète !", ephemeral=True
-            )
+            await interaction.response.send_message("❌ La partie est déjà complète !", ephemeral=True)
             return
         await interaction.response.send_modal(ParticipantModal())
 
+    @discord.ui.button(label="🚪 Se désinscrire", style=discord.ButtonStyle.grey)
+    async def desinscrire(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global participants, partie_message
+        pseudo_user = [p for p in participants if p["user"].id == interaction.user.id]
+        if not pseudo_user:
+            await interaction.response.send_message("❌ Tu n'es pas inscrit !", ephemeral=True)
+            return
+        participants = [p for p in participants if p["user"].id != interaction.user.id]
+        await interaction.response.send_message(f"✅ Tu as été désinscrit !", ephemeral=True)
+        if partie_message:
+            await partie_message.edit(embed=build_embed(), view=JoindreView())
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def partiepersso(ctx):
-    global participants
+    global participants, partie_message
     participants = []
-    embed = discord.Embed(
-        title="🎮 Partie Personnalisée League of Legends",
-        description=(
-            "Une partie personnalisée est en cours d'organisation !\n\n"
-            "Clique sur le bouton ci-dessous pour participer et entre ton pseudo LoL.\n\n"
-            "👥 **0/10** joueurs inscrits"
-        ),
-        color=discord.Color.blue()
-    )
-    await ctx.send(embed=embed, view=JoindreView())
+    msg = await ctx.send(embed=build_embed(), view=JoindreView())
+    partie_message = msg
     await ctx.message.delete()
 
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def retirer(ctx):
+    if not participants:
+        await ctx.send("❌ Aucun participant à retirer !", ephemeral=True)
+        return
+    await ctx.send("🗑️ Quel joueur veux-tu retirer ?", view=RetirerView(), ephemeral=True)
+    await ctx.message.delete()
+
+# ===== LANCEMENT =====
 
 @bot.event
 async def on_ready():
     print(f"✅ {bot.user} est en ligne !")
 
-import os
 bot.run(os.environ.get("TOKEN"))
-
