@@ -4,18 +4,16 @@ import random
 import os
 import json
 from datetime import datetime, timedelta
-from openai import OpenAI
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-client_ai = OpenAI(api_key=os.environ.get("OPENAI_KEY"))
 
 ROLES_LOL = ["Top", "Jungle", "Mid", "ADC", "Support"]
 
-# ===== PARTICIPANTS (sauvegardés en JSON) =====
+# ===== PARTICIPANTS =====
 
 def load_participants():
     try:
@@ -27,9 +25,6 @@ def load_participants():
 def save_participants(data):
     with open("participants.json", "w") as f:
         json.dump(data, f)
-
-partie_message_id = None
-partie_channel_id = None
 
 # ===== ÉCONOMIE =====
 
@@ -66,97 +61,277 @@ def set_last_daily(user_id, date):
     data[str(user_id)]["last_daily"] = date
     save_economy(data)
 
-# ===== IA =====
+# ===== MENUS ROLES =====
 
-historique_conversations = {}
+class GenreSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Homme", emoji="♂️"),
+            discord.SelectOption(label="Femme", emoji="♀️"),
+            discord.SelectOption(label="Autre", emoji="🏳️‍🌈"),
+        ]
+        super().__init__(placeholder="Fais un choix...", options=options, custom_id="genre_select")
 
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
+    async def callback(self, interaction: discord.Interaction):
+        role = discord.utils.get(interaction.guild.roles, name=self.values[0])
+        if role:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ Le rôle **{self.values[0]}** n'existe pas sur le serveur.", ephemeral=True)
 
-    if bot.user in message.mentions:
-        user_id = str(message.author.id)
-        texte = message.content.replace(f"<@{bot.user.id}>", "").strip()
+class AgeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Moins de 15 ans", emoji="🧒"),
+            discord.SelectOption(label="15-17 ans", emoji="🧑"),
+            discord.SelectOption(label="18-25 ans", emoji="👤"),
+            discord.SelectOption(label="25 ans et +", emoji="🧓"),
+        ]
+        super().__init__(placeholder="Fais un choix...", options=options, custom_id="age_select")
 
-        if user_id not in historique_conversations:
-            historique_conversations[user_id] = [
-                {"role": "system", "content": (
-                    "Tu es Noctali Bot, un assistant sympa et décontracté sur un serveur Discord français. "
-                    "Tu réponds toujours en français, tu es fun et tu connais bien League of Legends. "
-                    "Tu peux aussi donner des conseils LoL, des tips, et aider les membres."
-                )}
-            ]
+    async def callback(self, interaction: discord.Interaction):
+        role = discord.utils.get(interaction.guild.roles, name=self.values[0])
+        if role:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ Le rôle **{self.values[0]}** n'existe pas.", ephemeral=True)
 
-        historique_conversations[user_id].append({"role": "user", "content": texte})
+class SituationSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Célibataire", emoji="💔"),
+            discord.SelectOption(label="En couple", emoji="❤️"),
+            discord.SelectOption(label="Compliqué", emoji="💫"),
+        ]
+        super().__init__(placeholder="Fais un choix...", options=options, custom_id="situation_select")
 
-        async with message.channel.typing():
-            try:
-                response = client_ai.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=historique_conversations[user_id],
-                    max_tokens=500
-                )
-                reply = response.choices[0].message.content
-                historique_conversations[user_id].append({"role": "assistant", "content": reply})
+    async def callback(self, interaction: discord.Interaction):
+        role = discord.utils.get(interaction.guild.roles, name=self.values[0])
+        if role:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ Le rôle **{self.values[0]}** n'existe pas.", ephemeral=True)
 
-                if len(historique_conversations[user_id]) > 20:
-                    historique_conversations[user_id] = (
-                        historique_conversations[user_id][:1] +
-                        historique_conversations[user_id][-10:]
-                    )
-
-                await message.reply(reply)
-            except Exception as e:
-                await message.reply("❌ Une erreur s'est produite avec l'IA, réessaie !")
-
-    await bot.process_commands(message)
-
-@bot.command()
-async def conseil(ctx, *, champion: str = None):
-    if champion is None:
-        await ctx.send("❌ Usage : `!conseil <champion>`")
-        return
-    async with ctx.typing():
-        try:
-            response = client_ai.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Tu es un expert League of Legends. Donne des conseils courts et utiles en français."},
-                    {"role": "user", "content": f"Donne-moi 3 conseils pour jouer {champion} en League of Legends."}
-                ],
-                max_tokens=300
-            )
-            reply = response.choices[0].message.content
-            embed = discord.Embed(
-                title=f"🎮 Conseils pour {champion}",
-                description=reply,
-                color=discord.Color.blue()
-            )
-            await ctx.send(embed=embed)
-        except:
-            await ctx.send("❌ Erreur avec l'IA, réessaie !")
+class SetupView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(GenreSelect())
+        self.add_item(AgeSelect())
+        self.add_item(SituationSelect())
 
 @bot.command()
-async def resume(ctx):
-    if not ctx.message.reference:
-        await ctx.send("❌ Réponds à un message pour le résumer !")
-        return
-    msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
-    async with ctx.typing():
+@commands.has_permissions(administrator=True)
+async def setup(ctx):
+    embed = discord.Embed(
+        title="🌙 Bienvenue sur le serveur !",
+        description=("Sélectionne tes rôles ci-dessous pour personnaliser ton profil.\n\n♂️ → **Genre**\n🎂 → **Âge**\n💍 → **Situation amoureuse**"),
+        color=discord.Color.purple()
+    )
+    await ctx.send(embed=embed, view=SetupView())
+
+# ===== REGLEMENT =====
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def reglement(ctx):
+    embed = discord.Embed(
+        title="📖 Règlement du serveur",
+        description=(
+            "Bienvenue sur le serveur ! Merci de respecter les règles suivantes :\n\n"
+            "**1️⃣ Respectez tout le monde**\nAucune insulte, discrimination ou harcèlement ne sera toléré.\n\n"
+            "**2️⃣ Pas de spam**\nÉvitez les messages répétitifs ou les mentions abusives.\n\n"
+            "**3️⃣ Pas de pub**\nAucun lien ou invitation Discord sans autorisation d'un admin.\n\n"
+            "**4️⃣ Contenu approprié**\nPas de contenu NSFW en dehors des salons prévus.\n\n"
+            "**5️⃣ Respectez les salons**\nChaque salon a un sujet, restez dans le thème.\n\n"
+            "En restant sur ce serveur vous acceptez ces règles. ✅"
+        ),
+        color=discord.Color.purple()
+    )
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
+# ===== PARTIE PERSO LOL =====
+
+def build_embed():
+    participants = load_participants()
+    liste = "\n".join(f"**{i+1}.** {p['pseudo']}" for i, p in enumerate(participants)) if participants else "*Aucun participant pour l'instant*"
+    embed = discord.Embed(
+        title="✨ Partie Personnalisée League of Legends",
+        description=(
+            f"Une partie personnalisée est en cours d'organisation !\n\n"
+            f"Clique sur **Je veux participer** pour rejoindre et entre ton pseudo LoL.\n\n"
+            f"👥 **{len(participants)}/10** joueurs inscrits\n\n"
+            f"**Liste des participants :**\n{liste}"
+        ),
+        color=discord.Color.blue()
+    )
+    return embed
+
+class ParticipantModal(discord.ui.Modal, title="Rejoindre la partie"):
+    pseudo = discord.ui.TextInput(label="Ton pseudo League of Legends", placeholder="Ex: Noctali123", required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        participants = load_participants()
+        pseudo = self.pseudo.value
+        if any(p["pseudo"].lower() == pseudo.lower() for p in participants):
+            await interaction.response.send_message(f"❌ **{pseudo}** est déjà inscrit !", ephemeral=True)
+            return
+        if len(participants) >= 10:
+            await interaction.response.send_message("❌ La partie est déjà complète !", ephemeral=True)
+            return
+        participants.append({"user_id": interaction.user.id, "pseudo": pseudo})
+        save_participants(participants)
+        await interaction.response.send_message(f"✅ **{pseudo}** a rejoint la partie !", ephemeral=True)
         try:
-            response = client_ai.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Résume ce message en 1-2 phrases en français."},
-                    {"role": "user", "content": msg.content}
-                ],
-                max_tokens=150
-            )
-            reply = response.choices[0].message.content
-            await ctx.send(f"📝 **Résumé :** {reply}")
+            channel = bot.get_channel(interaction.channel_id)
+            async for msg in channel.history(limit=20):
+                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
+                    await msg.edit(embed=build_embed(), view=JoindreView())
+                    break
         except:
-            await ctx.send("❌ Erreur avec l'IA, réessaie !")
+            pass
+        if len(load_participants()) == 10:
+            await lancer_partie(interaction)
+
+class RetirerSelect(discord.ui.Select):
+    def __init__(self):
+        participants = load_participants()
+        options = [discord.SelectOption(label=p["pseudo"], value=p["pseudo"]) for p in participants]
+        super().__init__(placeholder="Choisir un joueur à retirer...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        participants = load_participants()
+        pseudo = self.values[0]
+        participants = [p for p in participants if p["pseudo"] != pseudo]
+        save_participants(participants)
+        await interaction.response.send_message(f"🗑️ **{pseudo}** a été retiré !", ephemeral=True)
+        try:
+            channel = bot.get_channel(interaction.channel_id)
+            async for msg in channel.history(limit=20):
+                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
+                    await msg.edit(embed=build_embed(), view=JoindreView())
+                    break
+        except:
+            pass
+
+class RetirerView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(RetirerSelect())
+
+async def lancer_partie(interaction: discord.Interaction):
+    participants = load_participants()
+    random.shuffle(participants)
+    equipe1 = participants[:5]
+    equipe2 = participants[5:]
+
+    def format_equipe(equipe):
+        roles = ROLES_LOL.copy()
+        random.shuffle(roles)
+        return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
+
+    embed = discord.Embed(title="⚔️ Les équipes sont prêtes !", color=discord.Color.gold())
+    embed.add_field(name="🔵 Équipe 1", value=format_equipe(equipe1), inline=True)
+    embed.add_field(name="🔴 Équipe 2", value=format_equipe(equipe2), inline=True)
+    await interaction.channel.send(embed=embed, view=RerollView(equipe1, equipe2))
+    save_participants([])
+
+class RerollView(discord.ui.View):
+    def __init__(self, equipe1, equipe2):
+        super().__init__(timeout=None)
+        self.equipe1 = equipe1
+        self.equipe2 = equipe2
+
+    @discord.ui.button(label="🎲 Reroll les rôles", style=discord.ButtonStyle.blurple)
+    async def reroll_roles(self, interaction: discord.Interaction, button: discord.ui.Button):
+        def format_equipe(equipe):
+            roles = ROLES_LOL.copy()
+            random.shuffle(roles)
+            return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
+        embed = discord.Embed(title="⚔️ Rôles rerollés !", color=discord.Color.gold())
+        embed.add_field(name="🔵 Équipe 1", value=format_equipe(self.equipe1), inline=True)
+        embed.add_field(name="🔴 Équipe 2", value=format_equipe(self.equipe2), inline=True)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="🔄 Reroll les équipes", style=discord.ButtonStyle.red)
+    async def reroll_equipes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        tous = self.equipe1 + self.equipe2
+        random.shuffle(tous)
+        self.equipe1 = tous[:5]
+        self.equipe2 = tous[5:]
+        def format_equipe(equipe):
+            roles = ROLES_LOL.copy()
+            random.shuffle(roles)
+            return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
+        embed = discord.Embed(title="⚔️ Équipes rerollées !", color=discord.Color.gold())
+        embed.add_field(name="🔵 Équipe 1", value=format_equipe(self.equipe1), inline=True)
+        embed.add_field(name="🔴 Équipe 2", value=format_equipe(self.equipe2), inline=True)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+class JoindreView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="⚔️ Je veux participer !", style=discord.ButtonStyle.green)
+    async def rejoindre(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if len(load_participants()) >= 10:
+            await interaction.response.send_message("❌ La partie est déjà complète !", ephemeral=True)
+            return
+        await interaction.response.send_modal(ParticipantModal())
+
+    @discord.ui.button(label="🚪 Se désinscrire", style=discord.ButtonStyle.grey)
+    async def desinscrire(self, interaction: discord.Interaction, button: discord.ui.Button):
+        participants = load_participants()
+        if not any(p["user_id"] == interaction.user.id for p in participants):
+            await interaction.response.send_message("❌ Tu n'es pas inscrit !", ephemeral=True)
+            return
+        participants = [p for p in participants if p["user_id"] != interaction.user.id]
+        save_participants(participants)
+        await interaction.response.send_message("✅ Tu as été désinscrit !", ephemeral=True)
+        try:
+            channel = bot.get_channel(interaction.channel_id)
+            async for msg in channel.history(limit=20):
+                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
+                    await msg.edit(embed=build_embed(), view=JoindreView())
+                    break
+        except:
+            pass
+
+    @discord.ui.button(label="🗑️ Reset la liste", style=discord.ButtonStyle.red)
+    async def reset_liste(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Réservé aux admins !", ephemeral=True)
+            return
+        save_participants([])
+        await interaction.response.send_message("✅ Liste réinitialisée !", ephemeral=True)
+        try:
+            channel = bot.get_channel(interaction.channel_id)
+            async for msg in channel.history(limit=20):
+                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
+                    await msg.edit(embed=build_embed(), view=JoindreView())
+                    break
+        except:
+            pass
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def partiepersso(ctx):
+    save_participants([])
+    msg = await ctx.send(embed=build_embed(), view=JoindreView())
+    await ctx.message.delete()
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def retirer(ctx):
+    participants = load_participants()
+    if not participants:
+        await ctx.send("❌ Aucun participant à retirer !")
+        return
+    await ctx.send("🗑️ Quel joueur veux-tu retirer ?", view=RetirerView())
+    await ctx.message.delete()
 
 # ===== COINFLIP =====
 
@@ -315,267 +490,12 @@ async def classement(ctx):
     embed = discord.Embed(title="🏆 Classement des richesses", description=description, color=discord.Color.gold())
     await ctx.send(embed=embed)
 
-# ===== MENUS ROLES =====
-
-class GenreSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label="Homme", emoji="♂️"),
-            discord.SelectOption(label="Femme", emoji="♀️"),
-            discord.SelectOption(label="Autre", emoji="🏳️‍🌈"),
-        ]
-        super().__init__(placeholder="Fais un choix...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        role = discord.utils.get(interaction.guild.roles, name=self.values[0])
-        if role:
-            await interaction.user.add_roles(role)
-            await interaction.response.send_message(f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ Le rôle **{self.values[0]}** n'existe pas sur le serveur.", ephemeral=True)
-
-class AgeSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label="Moins de 15 ans", emoji="🧒"),
-            discord.SelectOption(label="15-17 ans", emoji="🧑"),
-            discord.SelectOption(label="18-25 ans", emoji="👤"),
-            discord.SelectOption(label="25 ans et +", emoji="🧓"),
-        ]
-        super().__init__(placeholder="Fais un choix...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        role = discord.utils.get(interaction.guild.roles, name=self.values[0])
-        if role:
-            await interaction.user.add_roles(role)
-            await interaction.response.send_message(f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ Le rôle **{self.values[0]}** n'existe pas.", ephemeral=True)
-
-class SituationSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label="Célibataire", emoji="💔"),
-            discord.SelectOption(label="En couple", emoji="❤️"),
-            discord.SelectOption(label="Compliqué", emoji="💫"),
-        ]
-        super().__init__(placeholder="Fais un choix...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        role = discord.utils.get(interaction.guild.roles, name=self.values[0])
-        if role:
-            await interaction.user.add_roles(role)
-            await interaction.response.send_message(f"✅ Rôle **{self.values[0]}** attribué !", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ Le rôle **{self.values[0]}** n'existe pas.", ephemeral=True)
-
-class SetupView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(GenreSelect())
-        self.add_item(AgeSelect())
-        self.add_item(SituationSelect())
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def setup(ctx):
-    embed = discord.Embed(
-        title="🌙 Bienvenue sur le serveur !",
-        description=("Sélectionne tes rôles ci-dessous pour personnaliser ton profil.\n\n♂️ → **Genre**\n🎂 → **Âge**\n💍 → **Situation amoureuse**"),
-        color=discord.Color.purple()
-    )
-    await ctx.send(embed=embed, view=SetupView())
-
-# ===== REGLEMENT =====
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def reglement(ctx):
-    embed = discord.Embed(
-        title="📖 Règlement du serveur",
-        description=(
-            "Bienvenue sur le serveur ! Merci de respecter les règles suivantes :\n\n"
-            "**1️⃣ Respectez tout le monde**\nAucune insulte, discrimination ou harcèlement ne sera toléré.\n\n"
-            "**2️⃣ Pas de spam**\nÉvitez les messages répétitifs ou les mentions abusives.\n\n"
-            "**3️⃣ Pas de pub**\nAucun lien ou invitation Discord sans autorisation d'un admin.\n\n"
-            "**4️⃣ Contenu approprié**\nPas de contenu NSFW en dehors des salons prévus.\n\n"
-            "**5️⃣ Respectez les salons**\nChaque salon a un sujet, restez dans le thème.\n\n"
-            "En restant sur ce serveur vous acceptez ces règles. ✅"
-        ),
-        color=discord.Color.purple()
-    )
-    await ctx.send(embed=embed)
-    await ctx.message.delete()
-
-# ===== PARTIE PERSO LOL =====
-
-def build_embed():
-    participants = load_participants()
-    liste = "\n".join(f"**{i+1}.** {p['pseudo']}" for i, p in enumerate(participants)) if participants else "*Aucun participant pour l'instant*"
-    embed = discord.Embed(
-        title="🎮 Partie Personnalisée League of Legends",
-        description=(
-            f"👥 **{len(participants)}/10** joueurs inscrits\n\n"
-            f"**Liste des participants :**\n{liste}\n\n"
-            "Clique sur **Je veux participer** pour rejoindre !"
-        ),
-        color=discord.Color.blue()
-    )
-    return embed
-
-class ParticipantModal(discord.ui.Modal, title="Rejoindre la partie"):
-    pseudo = discord.ui.TextInput(label="Ton pseudo League of Legends", placeholder="Ex: Noctali123", required=True)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        participants = load_participants()
-        pseudo = self.pseudo.value
-        if any(p["pseudo"].lower() == pseudo.lower() for p in participants):
-            await interaction.response.send_message(f"❌ **{pseudo}** est déjà inscrit !", ephemeral=True)
-            return
-        if len(participants) >= 10:
-            await interaction.response.send_message("❌ La partie est déjà complète !", ephemeral=True)
-            return
-        participants.append({"user_id": interaction.user.id, "pseudo": pseudo})
-        save_participants(participants)
-        await interaction.response.send_message(f"✅ **{pseudo}** a rejoint la partie !", ephemeral=True)
-
-        try:
-            channel = bot.get_channel(interaction.channel_id)
-            async for msg in channel.history(limit=20):
-                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
-                    await msg.edit(embed=build_embed(), view=JoindreView())
-                    break
-        except:
-            pass
-
-        if len(participants) == 10:
-            await lancer_partie(interaction)
-
-class RetirerSelect(discord.ui.Select):
-    def __init__(self):
-        participants = load_participants()
-        options = [discord.SelectOption(label=p["pseudo"], value=p["pseudo"]) for p in participants]
-        super().__init__(placeholder="Choisir un joueur à retirer...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        participants = load_participants()
-        pseudo = self.values[0]
-        participants = [p for p in participants if p["pseudo"] != pseudo]
-        save_participants(participants)
-        await interaction.response.send_message(f"🗑️ **{pseudo}** a été retiré !", ephemeral=True)
-        try:
-            channel = bot.get_channel(interaction.channel_id)
-            async for msg in channel.history(limit=20):
-                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
-                    await msg.edit(embed=build_embed(), view=JoindreView())
-                    break
-        except:
-            pass
-
-class RetirerView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=60)
-        self.add_item(RetirerSelect())
-
-async def lancer_partie(interaction: discord.Interaction):
-    participants = load_participants()
-    random.shuffle(participants)
-    equipe1 = participants[:5]
-    equipe2 = participants[5:]
-
-    def format_equipe(equipe):
-        roles = ROLES_LOL.copy()
-        random.shuffle(roles)
-        return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
-
-    embed = discord.Embed(title="⚔️ Les équipes sont prêtes !", color=discord.Color.gold())
-    embed.add_field(name="🔵 Équipe 1", value=format_equipe(equipe1), inline=True)
-    embed.add_field(name="🔴 Équipe 2", value=format_equipe(equipe2), inline=True)
-    await interaction.channel.send(embed=embed, view=RerollView(equipe1, equipe2))
-    save_participants([])
-
-class RerollView(discord.ui.View):
-    def __init__(self, equipe1, equipe2):
-        super().__init__(timeout=None)
-        self.equipe1 = equipe1
-        self.equipe2 = equipe2
-
-    @discord.ui.button(label="🎲 Reroll les rôles", style=discord.ButtonStyle.blurple)
-    async def reroll_roles(self, interaction: discord.Interaction, button: discord.ui.Button):
-        def format_equipe(equipe):
-            roles = ROLES_LOL.copy()
-            random.shuffle(roles)
-            return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
-        embed = discord.Embed(title="⚔️ Rôles rerollés !", color=discord.Color.gold())
-        embed.add_field(name="🔵 Équipe 1", value=format_equipe(self.equipe1), inline=True)
-        embed.add_field(name="🔴 Équipe 2", value=format_equipe(self.equipe2), inline=True)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="🔄 Reroll les équipes", style=discord.ButtonStyle.red)
-    async def reroll_equipes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        tous = self.equipe1 + self.equipe2
-        random.shuffle(tous)
-        self.equipe1 = tous[:5]
-        self.equipe2 = tous[5:]
-        def format_equipe(equipe):
-            roles = ROLES_LOL.copy()
-            random.shuffle(roles)
-            return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
-        embed = discord.Embed(title="⚔️ Équipes rerollées !", color=discord.Color.gold())
-        embed.add_field(name="🔵 Équipe 1", value=format_equipe(self.equipe1), inline=True)
-        embed.add_field(name="🔴 Équipe 2", value=format_equipe(self.equipe2), inline=True)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-class JoindreView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="⚔️ Je veux participer !", style=discord.ButtonStyle.green)
-    async def rejoindre(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if len(load_participants()) >= 10:
-            await interaction.response.send_message("❌ La partie est déjà complète !", ephemeral=True)
-            return
-        await interaction.response.send_modal(ParticipantModal())
-
-    @discord.ui.button(label="🚪 Se désinscrire", style=discord.ButtonStyle.grey)
-    async def desinscrire(self, interaction: discord.Interaction, button: discord.ui.Button):
-        participants = load_participants()
-        if not any(p["user_id"] == interaction.user.id for p in participants):
-            await interaction.response.send_message("❌ Tu n'es pas inscrit !", ephemeral=True)
-            return
-        participants = [p for p in participants if p["user_id"] != interaction.user.id]
-        save_participants(participants)
-        await interaction.response.send_message("✅ Tu as été désinscrit !", ephemeral=True)
-        try:
-            channel = bot.get_channel(interaction.channel_id)
-            async for msg in channel.history(limit=20):
-                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
-                    await msg.edit(embed=build_embed(), view=JoindreView())
-                    break
-        except:
-            pass
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def partiepersso(ctx):
-    save_participants([])
-    msg = await ctx.send(embed=build_embed(), view=JoindreView())
-    await ctx.message.delete()
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def retirer(ctx):
-    participants = load_participants()
-    if not participants:
-        await ctx.send("❌ Aucun participant à retirer !")
-        return
-    await ctx.send("🗑️ Quel joueur veux-tu retirer ?", view=RetirerView())
-    await ctx.message.delete()
-
 # ===== LANCEMENT =====
 
 @bot.event
 async def on_ready():
+    bot.add_view(SetupView())
+    bot.add_view(JoindreView())
     print(f"✅ {bot.user} est en ligne !")
 
 bot.run(os.environ.get("TOKEN"))
