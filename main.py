@@ -157,6 +157,170 @@ async def on_ready():
     print(f"✅ {bot.user} est en ligne !")
     rappel_mudae.start()
 
+import random
+
+ROLES_LOL = ["Top", "Jungle", "Mid", "ADC", "Support"]
+
+participants = []
+
+class ParticipantModal(discord.ui.Modal, title="Rejoindre la partie"):
+    pseudo = discord.ui.TextInput(
+        label="Ton pseudo League of Legends",
+        placeholder="Ex: Noctali123",
+        required=True
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        global participants
+        pseudo = self.pseudo.value
+
+        # Vérifie si déjà inscrit
+        if any(p["pseudo"] == pseudo for p in participants):
+            await interaction.response.send_message(
+                f"❌ **{pseudo}** est déjà inscrit !", ephemeral=True
+            )
+            return
+
+        participants.append({"user": interaction.user, "pseudo": pseudo})
+        await interaction.response.send_message(
+            f"✅ **{pseudo}** a rejoint la partie ! ({len(participants)}/10)",
+            ephemeral=True
+        )
+
+        if len(participants) == 10:
+            await lancer_partie(interaction)
+
+async def lancer_partie(interaction: discord.Interaction):
+    global participants
+    random.shuffle(participants)
+
+    equipe1 = participants[:5]
+    equipe2 = participants[5:]
+    roles = ROLES_LOL.copy()
+
+    def format_equipe(equipe):
+        random.shuffle(roles)
+        return "\n".join(
+            f"**{roles[i]}** → {p['pseudo']}"
+            for i, p in enumerate(equipe)
+        )
+
+    embed = discord.Embed(
+        title="⚔️ Partie Personnalisée — Les équipes sont prêtes !",
+        color=discord.Color.gold()
+    )
+    embed.add_field(
+        name="🔵 Équipe 1",
+        value=format_equipe(equipe1),
+        inline=True
+    )
+    embed.add_field(
+        name="🔴 Équipe 2",
+        value=format_equipe(equipe2),
+        inline=True
+    )
+
+    view = RerollView(equipe1, equipe2)
+    await interaction.channel.send(embed=embed, view=view)
+    participants = []
+
+
+class RerollView(discord.ui.View):
+    def __init__(self, equipe1, equipe2):
+        super().__init__(timeout=None)
+        self.equipe1 = equipe1
+        self.equipe2 = equipe2
+
+    @discord.ui.button(label="🎲 Reroll les rôles", style=discord.ButtonStyle.blurple)
+    async def reroll(self, interaction: discord.Interaction, button: discord.ui.Button):
+        roles = ROLES_LOL.copy()
+
+        def format_equipe(equipe):
+            random.shuffle(roles)
+            return "\n".join(
+                f"**{roles[i]}** → {p['pseudo']}"
+                for i, p in enumerate(equipe)
+            )
+
+        embed = discord.Embed(
+            title="⚔️ Partie Personnalisée — Rôles rerollés !",
+            color=discord.Color.gold()
+        )
+        embed.add_field(
+            name="🔵 Équipe 1",
+            value=format_equipe(self.equipe1),
+            inline=True
+        )
+        embed.add_field(
+            name="🔴 Équipe 2",
+            value=format_equipe(self.equipe2),
+            inline=True
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="🔄 Reroll les équipes", style=discord.ButtonStyle.red)
+    async def reroll_equipes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        tous = self.equipe1 + self.equipe2
+        random.shuffle(tous)
+        self.equipe1 = tous[:5]
+        self.equipe2 = tous[5:]
+        roles = ROLES_LOL.copy()
+
+        def format_equipe(equipe):
+            random.shuffle(roles)
+            return "\n".join(
+                f"**{roles[i]}** → {p['pseudo']}"
+                for i, p in enumerate(equipe)
+            )
+
+        embed = discord.Embed(
+            title="⚔️ Partie Personnalisée — Équipes rerollées !",
+            color=discord.Color.gold()
+        )
+        embed.add_field(
+            name="🔵 Équipe 1",
+            value=format_equipe(self.equipe1),
+            inline=True
+        )
+        embed.add_field(
+            name="🔴 Équipe 2",
+            value=format_equipe(self.equipe2),
+            inline=True
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class JoindreView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="⚔️ Je veux participer !", style=discord.ButtonStyle.green)
+    async def rejoindre(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if len(participants) >= 10:
+            await interaction.response.send_message(
+                "❌ La partie est déjà complète !", ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(ParticipantModal())
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def partiepersso(ctx):
+    global participants
+    participants = []
+    embed = discord.Embed(
+        title="🎮 Partie Personnalisée League of Legends",
+        description=(
+            "Une partie personnalisée est en cours d'organisation !\n\n"
+            "Clique sur le bouton ci-dessous pour participer et entre ton pseudo LoL.\n\n"
+            "👥 **0/10** joueurs inscrits"
+        ),
+        color=discord.Color.blue()
+    )
+    await ctx.send(embed=embed, view=JoindreView())
+    await ctx.message.delete()
+
 
 @bot.event
 async def on_ready():
