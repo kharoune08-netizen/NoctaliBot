@@ -4,16 +4,32 @@ import random
 import os
 import json
 from datetime import datetime, timedelta
+from openai import OpenAI
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+client_ai = OpenAI(api_key=os.environ.get("OPENAI_KEY"))
 
 ROLES_LOL = ["Top", "Jungle", "Mid", "ADC", "Support"]
-participants = []
-partie_message = None
+
+# ===== PARTICIPANTS (sauvegardés en JSON) =====
+
+def load_participants():
+    try:
+        with open("participants.json", "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def save_participants(data):
+    with open("participants.json", "w") as f:
+        json.dump(data, f)
+
+partie_message_id = None
+partie_channel_id = None
 
 # ===== ÉCONOMIE =====
 
@@ -36,7 +52,7 @@ def set_balance(user_id, amount):
     data = load_economy()
     if str(user_id) not in data:
         data[str(user_id)] = {}
-    data[str(user_id)]["balance"] = amount
+    data[str(user_id)]["balance"] = max(0, amount)
     save_economy(data)
 
 def get_last_daily(user_id):
@@ -49,6 +65,98 @@ def set_last_daily(user_id, date):
         data[str(user_id)] = {}
     data[str(user_id)]["last_daily"] = date
     save_economy(data)
+
+# ===== IA =====
+
+historique_conversations = {}
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    if bot.user in message.mentions:
+        user_id = str(message.author.id)
+        texte = message.content.replace(f"<@{bot.user.id}>", "").strip()
+
+        if user_id not in historique_conversations:
+            historique_conversations[user_id] = [
+                {"role": "system", "content": (
+                    "Tu es Noctali Bot, un assistant sympa et décontracté sur un serveur Discord français. "
+                    "Tu réponds toujours en français, tu es fun et tu connais bien League of Legends. "
+                    "Tu peux aussi donner des conseils LoL, des tips, et aider les membres."
+                )}
+            ]
+
+        historique_conversations[user_id].append({"role": "user", "content": texte})
+
+        async with message.channel.typing():
+            try:
+                response = client_ai.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=historique_conversations[user_id],
+                    max_tokens=500
+                )
+                reply = response.choices[0].message.content
+                historique_conversations[user_id].append({"role": "assistant", "content": reply})
+
+                if len(historique_conversations[user_id]) > 20:
+                    historique_conversations[user_id] = (
+                        historique_conversations[user_id][:1] +
+                        historique_conversations[user_id][-10:]
+                    )
+
+                await message.reply(reply)
+            except Exception as e:
+                await message.reply("❌ Une erreur s'est produite avec l'IA, réessaie !")
+
+    await bot.process_commands(message)
+
+@bot.command()
+async def conseil(ctx, *, champion: str = None):
+    if champion is None:
+        await ctx.send("❌ Usage : `!conseil <champion>`")
+        return
+    async with ctx.typing():
+        try:
+            response = client_ai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Tu es un expert League of Legends. Donne des conseils courts et utiles en français."},
+                    {"role": "user", "content": f"Donne-moi 3 conseils pour jouer {champion} en League of Legends."}
+                ],
+                max_tokens=300
+            )
+            reply = response.choices[0].message.content
+            embed = discord.Embed(
+                title=f"🎮 Conseils pour {champion}",
+                description=reply,
+                color=discord.Color.blue()
+            )
+            await ctx.send(embed=embed)
+        except:
+            await ctx.send("❌ Erreur avec l'IA, réessaie !")
+
+@bot.command()
+async def resume(ctx):
+    if not ctx.message.reference:
+        await ctx.send("❌ Réponds à un message pour le résumer !")
+        return
+    msg = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+    async with ctx.typing():
+        try:
+            response = client_ai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Résume ce message en 1-2 phrases en français."},
+                    {"role": "user", "content": msg.content}
+                ],
+                max_tokens=150
+            )
+            reply = response.choices[0].message.content
+            await ctx.send(f"📝 **Résumé :** {reply}")
+        except:
+            await ctx.send("❌ Erreur avec l'IA, réessaie !")
 
 # ===== COINFLIP =====
 
@@ -75,39 +183,26 @@ class CoinflipView(discord.ui.View):
     async def jouer(self, interaction, choix):
         resultat = random.choice(["pile", "face"])
         balance = get_balance(interaction.user.id)
-
         if choix == resultat:
             balance += self.mise
             set_balance(interaction.user.id, balance)
-            embed = discord.Embed(
-                title="🪙 Coinflip — Gagné !",
-                description=f"C'était **{resultat}** !\n✅ Tu gagnes **{self.mise}** 💰\nSolde : **{balance}** 💰",
-                color=discord.Color.green()
-            )
+            embed = discord.Embed(title="🪙 Coinflip — Gagné !", description=f"C'était **{resultat}** !\n✅ Tu gagnes **{self.mise}** 💰\nSolde : **{balance}** 💰", color=discord.Color.green())
         else:
             balance -= self.mise
             set_balance(interaction.user.id, balance)
-            embed = discord.Embed(
-                title="🪙 Coinflip — Perdu !",
-                description=f"C'était **{resultat}** !\n❌ Tu perds **{self.mise}** 💰\nSolde : **{balance}** 💰",
-                color=discord.Color.red()
-            )
+            embed = discord.Embed(title="🪙 Coinflip — Perdu !", description=f"C'était **{resultat}** !\n❌ Tu perds **{self.mise}** 💰\nSolde : **{balance}** 💰", color=discord.Color.red())
         await interaction.response.edit_message(embed=embed, view=None)
 
 @bot.command()
 async def coinflip(ctx, mise: int = None):
     if mise is None or mise <= 0:
-        await ctx.send("❌ Usage : `!coinflip <mise>`", ephemeral=True)
+        await ctx.send("❌ Usage : `!coinflip <mise>`")
         return
     balance = get_balance(ctx.author.id)
     if mise > balance:
         await ctx.send(f"❌ T'as pas assez de pièces ! Solde : **{balance}** 💰")
         return
-    embed = discord.Embed(
-        title="🪙 Coinflip",
-        description=f"Mise : **{mise}** 💰\nChoisis **Pile** ou **Face** !",
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title="🪙 Coinflip", description=f"Mise : **{mise}** 💰\nChoisis **Pile** ou **Face** !", color=discord.Color.gold())
     await ctx.send(embed=embed, view=CoinflipView(ctx.author, mise))
 
 # ===== SLOTS =====
@@ -124,10 +219,8 @@ async def slots(ctx, mise: int = None):
     if mise > balance:
         await ctx.send(f"❌ T'as pas assez de pièces ! Solde : **{balance}** 💰")
         return
-
     rouleaux = [random.choice(SYMBOLES) for _ in range(3)]
     s1, s2, s3 = rouleaux
-
     if s1 == s2 == s3:
         gain = mise * MULTIPLICATEURS[s1]
         balance += gain
@@ -142,22 +235,16 @@ async def slots(ctx, mise: int = None):
         balance -= mise
         resultat = f"❌ Perdu ! Tu perds **{mise}** 💰"
         color = discord.Color.red()
-
     set_balance(ctx.author.id, balance)
-    embed = discord.Embed(
-        title="🎰 Slots",
-        description=f"[ {s1} | {s2} | {s3} ]\n\n{resultat}\nSolde : **{balance}** 💰",
-        color=color
-    )
+    embed = discord.Embed(title="🎰 Slots", description=f"[ {s1} | {s2} | {s3} ]\n\n{resultat}\nSolde : **{balance}** 💰", color=color)
     await ctx.send(embed=embed)
 
-# ===== BONUS QUOTIDIEN =====
+# ===== DAILY =====
 
 @bot.command()
 async def daily(ctx):
     last = get_last_daily(ctx.author.id)
     now = datetime.now()
-
     if last:
         last_date = datetime.fromisoformat(last)
         if now - last_date < timedelta(hours=24):
@@ -166,17 +253,11 @@ async def daily(ctx):
             minutes = int((reste.seconds % 3600) // 60)
             await ctx.send(f"⏰ T'as déjà pris ton bonus ! Reviens dans **{heures}h {minutes}min**")
             return
-
     bonus = 500
     balance = get_balance(ctx.author.id) + bonus
     set_balance(ctx.author.id, balance)
     set_last_daily(ctx.author.id, now.isoformat())
-
-    embed = discord.Embed(
-        title="🎁 Bonus quotidien !",
-        description=f"Tu reçois **{bonus}** 💰 !\nSolde : **{balance}** 💰",
-        color=discord.Color.green()
-    )
+    embed = discord.Embed(title="🎁 Bonus quotidien !", description=f"Tu reçois **{bonus}** 💰 !\nSolde : **{balance}** 💰", color=discord.Color.green())
     await ctx.send(embed=embed)
 
 # ===== SOLDE =====
@@ -184,11 +265,7 @@ async def daily(ctx):
 @bot.command()
 async def solde(ctx):
     balance = get_balance(ctx.author.id)
-    embed = discord.Embed(
-        title=f"💰 Solde de {ctx.author.display_name}",
-        description=f"**{balance}** 💰",
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title=f"💰 Solde de {ctx.author.display_name}", description=f"**{balance}** 💰", color=discord.Color.gold())
     await ctx.send(embed=embed)
 
 # ===== VOLER =====
@@ -201,30 +278,20 @@ async def voler(ctx, membre: discord.Member = None):
     if membre.id == ctx.author.id:
         await ctx.send("❌ Tu peux pas te voler toi-même !")
         return
-
     victime_balance = get_balance(membre.id)
     if victime_balance < 100:
-        await ctx.send(f"❌ **{membre.display_name}** est trop pauvre, laisse-le tranquille 😭")
+        await ctx.send(f"❌ **{membre.display_name}** est trop pauvre !")
         return
-
     succes = random.random() < 0.4
     if succes:
         vol = random.randint(50, min(300, victime_balance))
         set_balance(membre.id, victime_balance - vol)
         set_balance(ctx.author.id, get_balance(ctx.author.id) + vol)
-        embed = discord.Embed(
-            title="💸 Vol réussi !",
-            description=f"Tu as volé **{vol}** 💰 à **{membre.display_name}** !",
-            color=discord.Color.green()
-        )
+        embed = discord.Embed(title="💸 Vol réussi !", description=f"Tu as volé **{vol}** 💰 à **{membre.display_name}** !", color=discord.Color.green())
     else:
         amende = random.randint(50, 200)
         set_balance(ctx.author.id, max(0, get_balance(ctx.author.id) - amende))
-        embed = discord.Embed(
-            title="🚨 Vol raté !",
-            description=f"Tu t'es fait attraper ! Tu paies une amende de **{amende}** 💰",
-            color=discord.Color.red()
-        )
+        embed = discord.Embed(title="🚨 Vol raté !", description=f"Tu t'es fait attraper ! Tu paies **{amende}** 💰 d'amende", color=discord.Color.red())
     await ctx.send(embed=embed)
 
 # ===== CLASSEMENT =====
@@ -235,24 +302,17 @@ async def classement(ctx):
     if not data:
         await ctx.send("❌ Personne n'a encore de pièces !")
         return
-
     sorted_data = sorted(data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)[:10]
     medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
-
     description = ""
     for i, (user_id, info) in enumerate(sorted_data):
         try:
             user = await bot.fetch_user(int(user_id))
             name = user.display_name
         except:
-            name = f"Utilisateur inconnu"
+            name = "Utilisateur inconnu"
         description += f"{medals[i]} **{name}** — {info.get('balance', 0)} 💰\n"
-
-    embed = discord.Embed(
-        title="🏆 Classement des richesses",
-        description=description,
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title="🏆 Classement des richesses", description=description, color=discord.Color.gold())
     await ctx.send(embed=embed)
 
 # ===== MENUS ROLES =====
@@ -321,12 +381,7 @@ class SetupView(discord.ui.View):
 async def setup(ctx):
     embed = discord.Embed(
         title="🌙 Bienvenue sur le serveur !",
-        description=(
-            "Sélectionne tes rôles ci-dessous pour personnaliser ton profil.\n\n"
-            "♂️ → **Genre**\n"
-            "🎂 → **Âge**\n"
-            "💍 → **Situation amoureuse**"
-        ),
+        description=("Sélectionne tes rôles ci-dessous pour personnaliser ton profil.\n\n♂️ → **Genre**\n🎂 → **Âge**\n💍 → **Situation amoureuse**"),
         color=discord.Color.purple()
     )
     await ctx.send(embed=embed, view=SetupView())
@@ -340,16 +395,11 @@ async def reglement(ctx):
         title="📖 Règlement du serveur",
         description=(
             "Bienvenue sur le serveur ! Merci de respecter les règles suivantes :\n\n"
-            "**1️⃣ Respectez tout le monde**\n"
-            "Aucune insulte, discrimination ou harcèlement ne sera toléré.\n\n"
-            "**2️⃣ Pas de spam**\n"
-            "Évitez les messages répétitifs ou les mentions abusives.\n\n"
-            "**3️⃣ Pas de pub**\n"
-            "Aucun lien ou invitation Discord sans autorisation d'un admin.\n\n"
-            "**4️⃣ Contenu approprié**\n"
-            "Pas de contenu NSFW en dehors des salons prévus.\n\n"
-            "**5️⃣ Respectez les salons**\n"
-            "Chaque salon a un sujet, restez dans le thème.\n\n"
+            "**1️⃣ Respectez tout le monde**\nAucune insulte, discrimination ou harcèlement ne sera toléré.\n\n"
+            "**2️⃣ Pas de spam**\nÉvitez les messages répétitifs ou les mentions abusives.\n\n"
+            "**3️⃣ Pas de pub**\nAucun lien ou invitation Discord sans autorisation d'un admin.\n\n"
+            "**4️⃣ Contenu approprié**\nPas de contenu NSFW en dehors des salons prévus.\n\n"
+            "**5️⃣ Respectez les salons**\nChaque salon a un sujet, restez dans le thème.\n\n"
             "En restant sur ce serveur vous acceptez ces règles. ✅"
         ),
         color=discord.Color.purple()
@@ -360,14 +410,14 @@ async def reglement(ctx):
 # ===== PARTIE PERSO LOL =====
 
 def build_embed():
+    participants = load_participants()
     liste = "\n".join(f"**{i+1}.** {p['pseudo']}" for i, p in enumerate(participants)) if participants else "*Aucun participant pour l'instant*"
     embed = discord.Embed(
         title="🎮 Partie Personnalisée League of Legends",
         description=(
-            "Une partie personnalisée est en cours d'organisation !\n\n"
-            "Clique sur **Je veux participer** pour rejoindre et entre ton pseudo LoL.\n\n"
             f"👥 **{len(participants)}/10** joueurs inscrits\n\n"
-            f"**Liste des participants :**\n{liste}"
+            f"**Liste des participants :**\n{liste}\n\n"
+            "Clique sur **Je veux participer** pour rejoindre !"
         ),
         color=discord.Color.blue()
     )
@@ -377,7 +427,7 @@ class ParticipantModal(discord.ui.Modal, title="Rejoindre la partie"):
     pseudo = discord.ui.TextInput(label="Ton pseudo League of Legends", placeholder="Ex: Noctali123", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
-        global participants, partie_message
+        participants = load_participants()
         pseudo = self.pseudo.value
         if any(p["pseudo"].lower() == pseudo.lower() for p in participants):
             await interaction.response.send_message(f"❌ **{pseudo}** est déjà inscrit !", ephemeral=True)
@@ -385,25 +435,42 @@ class ParticipantModal(discord.ui.Modal, title="Rejoindre la partie"):
         if len(participants) >= 10:
             await interaction.response.send_message("❌ La partie est déjà complète !", ephemeral=True)
             return
-        participants.append({"user": interaction.user, "pseudo": pseudo})
+        participants.append({"user_id": interaction.user.id, "pseudo": pseudo})
+        save_participants(participants)
         await interaction.response.send_message(f"✅ **{pseudo}** a rejoint la partie !", ephemeral=True)
-        if partie_message:
-            await partie_message.edit(embed=build_embed(), view=JoindreView())
+
+        try:
+            channel = bot.get_channel(interaction.channel_id)
+            async for msg in channel.history(limit=20):
+                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
+                    await msg.edit(embed=build_embed(), view=JoindreView())
+                    break
+        except:
+            pass
+
         if len(participants) == 10:
             await lancer_partie(interaction)
 
 class RetirerSelect(discord.ui.Select):
     def __init__(self):
+        participants = load_participants()
         options = [discord.SelectOption(label=p["pseudo"], value=p["pseudo"]) for p in participants]
         super().__init__(placeholder="Choisir un joueur à retirer...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        global participants, partie_message
+        participants = load_participants()
         pseudo = self.values[0]
         participants = [p for p in participants if p["pseudo"] != pseudo]
+        save_participants(participants)
         await interaction.response.send_message(f"🗑️ **{pseudo}** a été retiré !", ephemeral=True)
-        if partie_message:
-            await partie_message.edit(embed=build_embed(), view=JoindreView())
+        try:
+            channel = bot.get_channel(interaction.channel_id)
+            async for msg in channel.history(limit=20):
+                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
+                    await msg.edit(embed=build_embed(), view=JoindreView())
+                    break
+        except:
+            pass
 
 class RetirerView(discord.ui.View):
     def __init__(self):
@@ -411,7 +478,7 @@ class RetirerView(discord.ui.View):
         self.add_item(RetirerSelect())
 
 async def lancer_partie(interaction: discord.Interaction):
-    global participants
+    participants = load_participants()
     random.shuffle(participants)
     equipe1 = participants[:5]
     equipe2 = participants[5:]
@@ -421,11 +488,11 @@ async def lancer_partie(interaction: discord.Interaction):
         random.shuffle(roles)
         return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
 
-    embed = discord.Embed(title="⚔️ Partie Personnalisée — Les équipes sont prêtes !", color=discord.Color.gold())
+    embed = discord.Embed(title="⚔️ Les équipes sont prêtes !", color=discord.Color.gold())
     embed.add_field(name="🔵 Équipe 1", value=format_equipe(equipe1), inline=True)
     embed.add_field(name="🔴 Équipe 2", value=format_equipe(equipe2), inline=True)
     await interaction.channel.send(embed=embed, view=RerollView(equipe1, equipe2))
-    participants = []
+    save_participants([])
 
 class RerollView(discord.ui.View):
     def __init__(self, equipe1, equipe2):
@@ -465,34 +532,40 @@ class JoindreView(discord.ui.View):
 
     @discord.ui.button(label="⚔️ Je veux participer !", style=discord.ButtonStyle.green)
     async def rejoindre(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if len(participants) >= 10:
+        if len(load_participants()) >= 10:
             await interaction.response.send_message("❌ La partie est déjà complète !", ephemeral=True)
             return
         await interaction.response.send_modal(ParticipantModal())
 
     @discord.ui.button(label="🚪 Se désinscrire", style=discord.ButtonStyle.grey)
     async def desinscrire(self, interaction: discord.Interaction, button: discord.ui.Button):
-        global participants, partie_message
-        if not any(p["user"].id == interaction.user.id for p in participants):
+        participants = load_participants()
+        if not any(p["user_id"] == interaction.user.id for p in participants):
             await interaction.response.send_message("❌ Tu n'es pas inscrit !", ephemeral=True)
             return
-        participants = [p for p in participants if p["user"].id != interaction.user.id]
+        participants = [p for p in participants if p["user_id"] != interaction.user.id]
+        save_participants(participants)
         await interaction.response.send_message("✅ Tu as été désinscrit !", ephemeral=True)
-        if partie_message:
-            await partie_message.edit(embed=build_embed(), view=JoindreView())
+        try:
+            channel = bot.get_channel(interaction.channel_id)
+            async for msg in channel.history(limit=20):
+                if msg.author == bot.user and msg.embeds and "Partie Personnalisée" in msg.embeds[0].title:
+                    await msg.edit(embed=build_embed(), view=JoindreView())
+                    break
+        except:
+            pass
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def partiepersso(ctx):
-    global participants, partie_message
-    participants = []
+    save_participants([])
     msg = await ctx.send(embed=build_embed(), view=JoindreView())
-    partie_message = msg
     await ctx.message.delete()
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def retirer(ctx):
+    participants = load_participants()
     if not participants:
         await ctx.send("❌ Aucun participant à retirer !")
         return
