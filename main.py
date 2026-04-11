@@ -2,6 +2,8 @@ import discord
 from discord.ext import commands
 import random
 import os
+import json
+from datetime import datetime, timedelta
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -12,6 +14,246 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 ROLES_LOL = ["Top", "Jungle", "Mid", "ADC", "Support"]
 participants = []
 partie_message = None
+
+# ===== ÉCONOMIE =====
+
+def load_economy():
+    try:
+        with open("economy.json", "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_economy(data):
+    with open("economy.json", "w") as f:
+        json.dump(data, f)
+
+def get_balance(user_id):
+    data = load_economy()
+    return data.get(str(user_id), {}).get("balance", 500)
+
+def set_balance(user_id, amount):
+    data = load_economy()
+    if str(user_id) not in data:
+        data[str(user_id)] = {}
+    data[str(user_id)]["balance"] = amount
+    save_economy(data)
+
+def get_last_daily(user_id):
+    data = load_economy()
+    return data.get(str(user_id), {}).get("last_daily", None)
+
+def set_last_daily(user_id, date):
+    data = load_economy()
+    if str(user_id) not in data:
+        data[str(user_id)] = {}
+    data[str(user_id)]["last_daily"] = date
+    save_economy(data)
+
+# ===== COINFLIP =====
+
+class CoinflipView(discord.ui.View):
+    def __init__(self, user, mise):
+        super().__init__(timeout=30)
+        self.user = user
+        self.mise = mise
+
+    @discord.ui.button(label="🪙 Pile", style=discord.ButtonStyle.blurple)
+    async def pile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("❌ C'est pas ton jeu !", ephemeral=True)
+            return
+        await self.jouer(interaction, "pile")
+
+    @discord.ui.button(label="🪙 Face", style=discord.ButtonStyle.blurple)
+    async def face(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("❌ C'est pas ton jeu !", ephemeral=True)
+            return
+        await self.jouer(interaction, "face")
+
+    async def jouer(self, interaction, choix):
+        resultat = random.choice(["pile", "face"])
+        balance = get_balance(interaction.user.id)
+
+        if choix == resultat:
+            balance += self.mise
+            set_balance(interaction.user.id, balance)
+            embed = discord.Embed(
+                title="🪙 Coinflip — Gagné !",
+                description=f"C'était **{resultat}** !\n✅ Tu gagnes **{self.mise}** 💰\nSolde : **{balance}** 💰",
+                color=discord.Color.green()
+            )
+        else:
+            balance -= self.mise
+            set_balance(interaction.user.id, balance)
+            embed = discord.Embed(
+                title="🪙 Coinflip — Perdu !",
+                description=f"C'était **{resultat}** !\n❌ Tu perds **{self.mise}** 💰\nSolde : **{balance}** 💰",
+                color=discord.Color.red()
+            )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+@bot.command()
+async def coinflip(ctx, mise: int = None):
+    if mise is None or mise <= 0:
+        await ctx.send("❌ Usage : `!coinflip <mise>`", ephemeral=True)
+        return
+    balance = get_balance(ctx.author.id)
+    if mise > balance:
+        await ctx.send(f"❌ T'as pas assez de pièces ! Solde : **{balance}** 💰")
+        return
+    embed = discord.Embed(
+        title="🪙 Coinflip",
+        description=f"Mise : **{mise}** 💰\nChoisis **Pile** ou **Face** !",
+        color=discord.Color.gold()
+    )
+    await ctx.send(embed=embed, view=CoinflipView(ctx.author, mise))
+
+# ===== SLOTS =====
+
+SYMBOLES = ["🍒", "🍋", "🍊", "⭐", "💎", "7️⃣"]
+MULTIPLICATEURS = {"🍒": 2, "🍋": 2, "🍊": 3, "⭐": 5, "💎": 10, "7️⃣": 20}
+
+@bot.command()
+async def slots(ctx, mise: int = None):
+    if mise is None or mise <= 0:
+        await ctx.send("❌ Usage : `!slots <mise>`")
+        return
+    balance = get_balance(ctx.author.id)
+    if mise > balance:
+        await ctx.send(f"❌ T'as pas assez de pièces ! Solde : **{balance}** 💰")
+        return
+
+    rouleaux = [random.choice(SYMBOLES) for _ in range(3)]
+    s1, s2, s3 = rouleaux
+
+    if s1 == s2 == s3:
+        gain = mise * MULTIPLICATEURS[s1]
+        balance += gain
+        resultat = f"🎉 JACKPOT ! Tu gagnes **{gain}** 💰 (x{MULTIPLICATEURS[s1]})"
+        color = discord.Color.gold()
+    elif s1 == s2 or s2 == s3 or s1 == s3:
+        gain = mise
+        balance += gain
+        resultat = f"✅ Deux identiques ! Tu gagnes **{gain}** 💰"
+        color = discord.Color.green()
+    else:
+        balance -= mise
+        resultat = f"❌ Perdu ! Tu perds **{mise}** 💰"
+        color = discord.Color.red()
+
+    set_balance(ctx.author.id, balance)
+    embed = discord.Embed(
+        title="🎰 Slots",
+        description=f"[ {s1} | {s2} | {s3} ]\n\n{resultat}\nSolde : **{balance}** 💰",
+        color=color
+    )
+    await ctx.send(embed=embed)
+
+# ===== BONUS QUOTIDIEN =====
+
+@bot.command()
+async def daily(ctx):
+    last = get_last_daily(ctx.author.id)
+    now = datetime.now()
+
+    if last:
+        last_date = datetime.fromisoformat(last)
+        if now - last_date < timedelta(hours=24):
+            reste = timedelta(hours=24) - (now - last_date)
+            heures = int(reste.seconds // 3600)
+            minutes = int((reste.seconds % 3600) // 60)
+            await ctx.send(f"⏰ T'as déjà pris ton bonus ! Reviens dans **{heures}h {minutes}min**")
+            return
+
+    bonus = 500
+    balance = get_balance(ctx.author.id) + bonus
+    set_balance(ctx.author.id, balance)
+    set_last_daily(ctx.author.id, now.isoformat())
+
+    embed = discord.Embed(
+        title="🎁 Bonus quotidien !",
+        description=f"Tu reçois **{bonus}** 💰 !\nSolde : **{balance}** 💰",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+# ===== SOLDE =====
+
+@bot.command()
+async def solde(ctx):
+    balance = get_balance(ctx.author.id)
+    embed = discord.Embed(
+        title=f"💰 Solde de {ctx.author.display_name}",
+        description=f"**{balance}** 💰",
+        color=discord.Color.gold()
+    )
+    await ctx.send(embed=embed)
+
+# ===== VOLER =====
+
+@bot.command()
+async def voler(ctx, membre: discord.Member = None):
+    if membre is None:
+        await ctx.send("❌ Usage : `!voler @membre`")
+        return
+    if membre.id == ctx.author.id:
+        await ctx.send("❌ Tu peux pas te voler toi-même !")
+        return
+
+    victime_balance = get_balance(membre.id)
+    if victime_balance < 100:
+        await ctx.send(f"❌ **{membre.display_name}** est trop pauvre, laisse-le tranquille 😭")
+        return
+
+    succes = random.random() < 0.4
+    if succes:
+        vol = random.randint(50, min(300, victime_balance))
+        set_balance(membre.id, victime_balance - vol)
+        set_balance(ctx.author.id, get_balance(ctx.author.id) + vol)
+        embed = discord.Embed(
+            title="💸 Vol réussi !",
+            description=f"Tu as volé **{vol}** 💰 à **{membre.display_name}** !",
+            color=discord.Color.green()
+        )
+    else:
+        amende = random.randint(50, 200)
+        set_balance(ctx.author.id, max(0, get_balance(ctx.author.id) - amende))
+        embed = discord.Embed(
+            title="🚨 Vol raté !",
+            description=f"Tu t'es fait attraper ! Tu paies une amende de **{amende}** 💰",
+            color=discord.Color.red()
+        )
+    await ctx.send(embed=embed)
+
+# ===== CLASSEMENT =====
+
+@bot.command()
+async def classement(ctx):
+    data = load_economy()
+    if not data:
+        await ctx.send("❌ Personne n'a encore de pièces !")
+        return
+
+    sorted_data = sorted(data.items(), key=lambda x: x[1].get("balance", 0), reverse=True)[:10]
+    medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
+
+    description = ""
+    for i, (user_id, info) in enumerate(sorted_data):
+        try:
+            user = await bot.fetch_user(int(user_id))
+            name = user.display_name
+        except:
+            name = f"Utilisateur inconnu"
+        description += f"{medals[i]} **{name}** — {info.get('balance', 0)} 💰\n"
+
+    embed = discord.Embed(
+        title="🏆 Classement des richesses",
+        description=description,
+        color=discord.Color.gold()
+    )
+    await ctx.send(embed=embed)
 
 # ===== MENUS ROLES =====
 
@@ -132,46 +374,34 @@ def build_embed():
     return embed
 
 class ParticipantModal(discord.ui.Modal, title="Rejoindre la partie"):
-    pseudo = discord.ui.TextInput(
-        label="Ton pseudo League of Legends",
-        placeholder="Ex: Noctali123",
-        required=True
-    )
+    pseudo = discord.ui.TextInput(label="Ton pseudo League of Legends", placeholder="Ex: Noctali123", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
         global participants, partie_message
         pseudo = self.pseudo.value
-
         if any(p["pseudo"].lower() == pseudo.lower() for p in participants):
             await interaction.response.send_message(f"❌ **{pseudo}** est déjà inscrit !", ephemeral=True)
             return
-
         if len(participants) >= 10:
             await interaction.response.send_message("❌ La partie est déjà complète !", ephemeral=True)
             return
-
         participants.append({"user": interaction.user, "pseudo": pseudo})
         await interaction.response.send_message(f"✅ **{pseudo}** a rejoint la partie !", ephemeral=True)
-
         if partie_message:
             await partie_message.edit(embed=build_embed(), view=JoindreView())
-
         if len(participants) == 10:
             await lancer_partie(interaction)
 
 class RetirerSelect(discord.ui.Select):
     def __init__(self):
-        options = [
-            discord.SelectOption(label=p["pseudo"], value=p["pseudo"])
-            for p in participants
-        ]
+        options = [discord.SelectOption(label=p["pseudo"], value=p["pseudo"]) for p in participants]
         super().__init__(placeholder="Choisir un joueur à retirer...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
         global participants, partie_message
         pseudo = self.values[0]
         participants = [p for p in participants if p["pseudo"] != pseudo]
-        await interaction.response.send_message(f"🗑️ **{pseudo}** a été retiré de la liste !", ephemeral=True)
+        await interaction.response.send_message(f"🗑️ **{pseudo}** a été retiré !", ephemeral=True)
         if partie_message:
             await partie_message.edit(embed=build_embed(), view=JoindreView())
 
@@ -191,15 +421,10 @@ async def lancer_partie(interaction: discord.Interaction):
         random.shuffle(roles)
         return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
 
-    embed = discord.Embed(
-        title="⚔️ Partie Personnalisée — Les équipes sont prêtes !",
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title="⚔️ Partie Personnalisée — Les équipes sont prêtes !", color=discord.Color.gold())
     embed.add_field(name="🔵 Équipe 1", value=format_equipe(equipe1), inline=True)
     embed.add_field(name="🔴 Équipe 2", value=format_equipe(equipe2), inline=True)
-
-    view = RerollView(equipe1, equipe2)
-    await interaction.channel.send(embed=embed, view=view)
+    await interaction.channel.send(embed=embed, view=RerollView(equipe1, equipe2))
     participants = []
 
 class RerollView(discord.ui.View):
@@ -214,8 +439,7 @@ class RerollView(discord.ui.View):
             roles = ROLES_LOL.copy()
             random.shuffle(roles)
             return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
-
-        embed = discord.Embed(title="⚔️ Partie Personnalisée — Rôles rerollés !", color=discord.Color.gold())
+        embed = discord.Embed(title="⚔️ Rôles rerollés !", color=discord.Color.gold())
         embed.add_field(name="🔵 Équipe 1", value=format_equipe(self.equipe1), inline=True)
         embed.add_field(name="🔴 Équipe 2", value=format_equipe(self.equipe2), inline=True)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -226,13 +450,11 @@ class RerollView(discord.ui.View):
         random.shuffle(tous)
         self.equipe1 = tous[:5]
         self.equipe2 = tous[5:]
-
         def format_equipe(equipe):
             roles = ROLES_LOL.copy()
             random.shuffle(roles)
             return "\n".join(f"**{roles[i]}** → {p['pseudo']}" for i, p in enumerate(equipe))
-
-        embed = discord.Embed(title="⚔️ Partie Personnalisée — Équipes rerollées !", color=discord.Color.gold())
+        embed = discord.Embed(title="⚔️ Équipes rerollées !", color=discord.Color.gold())
         embed.add_field(name="🔵 Équipe 1", value=format_equipe(self.equipe1), inline=True)
         embed.add_field(name="🔴 Équipe 2", value=format_equipe(self.equipe2), inline=True)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -251,12 +473,11 @@ class JoindreView(discord.ui.View):
     @discord.ui.button(label="🚪 Se désinscrire", style=discord.ButtonStyle.grey)
     async def desinscrire(self, interaction: discord.Interaction, button: discord.ui.Button):
         global participants, partie_message
-        pseudo_user = [p for p in participants if p["user"].id == interaction.user.id]
-        if not pseudo_user:
+        if not any(p["user"].id == interaction.user.id for p in participants):
             await interaction.response.send_message("❌ Tu n'es pas inscrit !", ephemeral=True)
             return
         participants = [p for p in participants if p["user"].id != interaction.user.id]
-        await interaction.response.send_message(f"✅ Tu as été désinscrit !", ephemeral=True)
+        await interaction.response.send_message("✅ Tu as été désinscrit !", ephemeral=True)
         if partie_message:
             await partie_message.edit(embed=build_embed(), view=JoindreView())
 
@@ -273,9 +494,9 @@ async def partiepersso(ctx):
 @commands.has_permissions(administrator=True)
 async def retirer(ctx):
     if not participants:
-        await ctx.send("❌ Aucun participant à retirer !", ephemeral=True)
+        await ctx.send("❌ Aucun participant à retirer !")
         return
-    await ctx.send("🗑️ Quel joueur veux-tu retirer ?", view=RetirerView(), ephemeral=True)
+    await ctx.send("🗑️ Quel joueur veux-tu retirer ?", view=RetirerView())
     await ctx.message.delete()
 
 # ===== LANCEMENT =====
