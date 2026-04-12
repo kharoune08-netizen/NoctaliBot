@@ -746,8 +746,14 @@ async def on_ready():
     bot.add_view(JoindreView())
     rappel_casino.start()
     rappel_game.start()
-    await rappel_casino()
-    await rappel_game()
     print(f"✅ {bot.user} est en ligne !")
+
+@rappel_casino.before_loop
+async def before_casino():
+    await bot.wait_until_ready()
+
+@rappel_game.before_loop
+async def before_game():
+    await bot.wait_until_ready()
 
 bot.run(os.environ.get("TOKEN"))
