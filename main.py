@@ -748,6 +748,22 @@ async def on_ready():
     rappel_game.start()
     print(f"✅ {bot.user} est en ligne !")
 
+WELCOME_CHANNEL_ID = 1490028436805259344
+
+@bot.event
+async def on_member_join(member):
+    channel = bot.get_channel(WELCOME_CHANNEL_ID)
+    if channel:
+        embed = discord.Embed(
+            title="🎉 Nouveau membre !",
+            description=f"**{member.name}** a rejoint le serveur !\n\ncc {member.mention} ça va ?",
+            color=discord.Color.green()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        await channel.send(embed=embed)
+
+@rappel_casino.before_loop
+
 @rappel_casino.before_loop
 async def before_casino():
     await bot.wait_until_ready()
