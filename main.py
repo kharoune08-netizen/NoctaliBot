@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import random
 import os
 import json
@@ -13,6 +13,23 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 ROLES_LOL = ["Top", "Jungle", "Mid", "ADC", "Support"]
 PERM_ROLE = "Noctali Bot Perm"
+CASINO_CHANNEL_ID = 1492499084412583956
+GAME_CHANNEL_ID = 1492844673041956905
+
+DEVINETTES = [
+    {"question": "J'ai des villes, mais pas de maisons. Des forêts, mais pas d'arbres. De l'eau, mais pas de poissons. Qu'est-ce que je suis ?", "reponse": "une carte"},
+    {"question": "Plus je sèche, plus je suis mouillée. Qu'est-ce que je suis ?", "reponse": "une serviette"},
+    {"question": "Je parle sans bouche et j'entends sans oreilles. Qu'est-ce que je suis ?", "reponse": "un echo"},
+    {"question": "Plus tu m'enlèves, plus je grandis. Qu'est-ce que je suis ?", "reponse": "un trou"},
+    {"question": "Je suis léger comme une plume mais même l'homme le plus fort ne peut me tenir plus d'une minute. Qu'est-ce que je suis ?", "reponse": "le souffle"},
+    {"question": "Je n'ai pas de jambes mais je cours partout. Qu'est-ce que je suis ?", "reponse": "l eau"},
+    {"question": "Quel est le comble pour un électricien ?", "reponse": "de ne pas etre au courant"},
+    {"question": "Qu'est-ce qu'un canif ?", "reponse": "le petit du canif"},
+    {"question": "Plus je suis grande, moins on me voit. Qu'est-ce que je suis ?", "reponse": "l obscurite"},
+    {"question": "J'ai une tête mais pas de corps, une queue mais pas de pattes. Qu'est-ce que je suis ?", "reponse": "une piece de monnaie"},
+]
+
+devinette_active = {}
 
 # ===== PARTICIPANTS =====
 
@@ -64,6 +81,224 @@ def set_last_daily(user_id, date):
 
 def has_perm(user):
     return discord.utils.get(user.roles, name=PERM_ROLE) is not None
+
+# ===== RAPPELS AUTOMATIQUES =====
+
+@tasks.loop(hours=2)
+async def rappel_casino():
+    channel = bot.get_channel(CASINO_CHANNEL_ID)
+    if channel:
+        embed = discord.Embed(
+            title="🎰 Rappel des commandes Casino !",
+            description=(
+                "**Jeux :**\n"
+                "`!coinflip <mise>` → Pile ou Face\n"
+                "`!slots <mise>` → Machine à sous\n\n"
+                "**Économie :**\n"
+                "`!daily` → Bonus de 500 💰 par jour\n"
+                "`!solde` → Voir tes pièces\n"
+                "`!voler @membre` → Tenter de voler (40%)\n"
+                "`!classement` → Top 10 des plus riches\n\n"
+                "🎰 Bonne chance !"
+            ),
+            color=discord.Color.gold()
+        )
+        await channel.send(embed=embed)
+
+@tasks.loop(hours=2)
+async def rappel_game():
+    channel = bot.get_channel(GAME_CHANNEL_ID)
+    if channel:
+        embed = discord.Embed(
+            title="🎮 Rappel des commandes Game !",
+            description=(
+                "**Pierre Feuille Ciseaux :**\n"
+                "`!pfc pierre` → Jouer pierre\n"
+                "`!pfc feuille` → Jouer feuille\n"
+                "`!pfc ciseaux` → Jouer ciseaux\n\n"
+                "**Quiz / Devinettes :**\n"
+                "`!devinette` → Nouvelle devinette\n\n"
+                "🎮 Amuse-toi bien !"
+            ),
+            color=discord.Color.blue()
+        )
+        await channel.send(embed=embed)
+
+# ===== PIERRE FEUILLE CISEAUX =====
+
+@bot.command()
+async def pfc(ctx, choix: str = None):
+    if choix is None or choix.lower() not in ["pierre", "feuille", "ciseaux"]:
+        await ctx.send("❌ Usage : `!pfc <pierre/feuille/ciseaux>`")
+        return
+
+    choix = choix.lower()
+    bot_choix = random.choice(["pierre", "feuille", "ciseaux"])
+    emojis = {"pierre": "🪨", "feuille": "📄", "ciseaux": "✂️"}
+
+    if choix == bot_choix:
+        resultat = "🤝 Égalité !"
+        color = discord.Color.yellow()
+    elif (choix == "pierre" and bot_choix == "ciseaux") or \
+         (choix == "feuille" and bot_choix == "pierre") or \
+         (choix == "ciseaux" and bot_choix == "feuille"):
+        resultat = "🎉 Tu as gagné !"
+        color = discord.Color.green()
+    else:
+        resultat = "😈 J'ai gagné !"
+        color = discord.Color.red()
+
+    embed = discord.Embed(
+        title="🪨📄✂️ Pierre Feuille Ciseaux",
+        description=(
+            f"Tu as choisi : {emojis[choix]} **{choix}**\n"
+            f"J'ai choisi : {emojis[bot_choix]} **{bot_choix}**\n\n"
+            f"**{resultat}**"
+        ),
+        color=color
+    )
+    await ctx.send(embed=embed)
+
+# ===== DEVINETTES =====
+
+@bot.command()
+async def devinette(ctx):
+    question = random.choice(DEVINETTES)
+    devinette_active[ctx.channel.id] = question["reponse"].lower()
+
+    embed = discord.Embed(
+        title="🧠 Devinette !",
+        description=f"{question['question']}\n\n*Réponds dans le chat !*",
+        color=discord.Color.purple()
+    )
+    embed.set_footer(text="Tu as 30 secondes pour répondre !")
+    await ctx.send(embed=embed)
+
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot
+
+    try:
+        msg = await bot.wait_for("message", timeout=30.0, check=check)
+        if msg.content.lower() == devinette_active.get(ctx.channel.id):
+            await msg.reply(f"✅ Bravo **{msg.author.display_name}** ! C'était bien **{question['reponse']}** ! 🎉")
+        else:
+            await msg.reply(f"❌ Raté ! La réponse était **{question['reponse']}** !")
+    except:
+        await ctx.send(f"⏰ Temps écoulé ! La réponse était **{question['reponse']}** !")
+
+    devinette_active.pop(ctx.channel.id, None)
+
+# ===== MODÉRATION =====
+
+@bot.command()
+@commands.has_permissions(moderate_members=True)
+async def timeout(ctx, membre: discord.Member = None, duree: int = 10, *, raison: str = "Aucune raison"):
+    if membre is None:
+        await ctx.send("❌ Usage : `!timeout @membre <durée en minutes> <raison>`")
+        return
+    until = discord.utils.utcnow() + timedelta(minutes=duree)
+    await membre.timeout(until, reason=raison)
+    embed = discord.Embed(title="⏰ Timeout", description=f"**{membre.display_name}** a été mis en timeout pour **{duree} minutes**\n📝 Raison : {raison}", color=discord.Color.orange())
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
+@bot.command()
+@commands.has_permissions(moderate_members=True)
+async def unmute(ctx, membre: discord.Member = None):
+    if membre is None:
+        await ctx.send("❌ Usage : `!unmute @membre`")
+        return
+    await membre.timeout(None)
+    embed = discord.Embed(title="🔊 Unmute", description=f"**{membre.display_name}** a été démute !", color=discord.Color.green())
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def kick(ctx, membre: discord.Member = None, *, raison: str = "Aucune raison"):
+    if membre is None:
+        await ctx.send("❌ Usage : `!kick @membre <raison>`")
+        return
+    await membre.kick(reason=raison)
+    embed = discord.Embed(title="👢 Kick", description=f"**{membre.display_name}** a été kick !\n📝 Raison : {raison}", color=discord.Color.red())
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
+@bot.command()
+@commands.has_permissions(ban_members=True)
+async def ban(ctx, membre: discord.Member = None, *, raison: str = "Aucune raison"):
+    if membre is None:
+        await ctx.send("❌ Usage : `!ban @membre <raison>`")
+        return
+    await membre.ban(reason=raison)
+    embed = discord.Embed(title="🔨 Ban", description=f"**{membre.display_name}** a été banni !\n📝 Raison : {raison}", color=discord.Color.dark_red())
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
+@bot.command()
+@commands.has_permissions(ban_members=True)
+async def unban(ctx, *, nom: str = None):
+    if nom is None:
+        await ctx.send("❌ Usage : `!unban <nom#0000>`")
+        return
+    banned = [entry async for entry in ctx.guild.bans()]
+    for ban_entry in banned:
+        if str(ban_entry.user) == nom:
+            await ctx.guild.unban(ban_entry.user)
+            embed = discord.Embed(title="✅ Unban", description=f"**{ban_entry.user}** a été débanni !", color=discord.Color.green())
+            await ctx.send(embed=embed)
+            return
+    await ctx.send(f"❌ Utilisateur **{nom}** introuvable dans les bans.")
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def clear(ctx, nombre: int = None):
+    if nombre is None or nombre <= 0:
+        await ctx.send("❌ Usage : `!clear <nombre>`")
+        return
+    await ctx.channel.purge(limit=nombre + 1)
+    msg = await ctx.send(f"🧹 **{nombre}** messages supprimés !")
+    await msg.delete(delay=3)
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def slowmode(ctx, secondes: int = 0):
+    await ctx.channel.edit(slowmode_delay=secondes)
+    if secondes == 0:
+        await ctx.send("✅ Slowmode désactivé !")
+    else:
+        await ctx.send(f"✅ Slowmode mis à **{secondes} secondes** !")
+    await ctx.message.delete()
+
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def addrole(ctx, membre: discord.Member = None, *, role_name: str = None):
+    if membre is None or role_name is None:
+        await ctx.send("❌ Usage : `!addrole @membre <nom du rôle>`")
+        return
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if not role:
+        await ctx.send(f"❌ Le rôle **{role_name}** n'existe pas !")
+        return
+    await membre.add_roles(role)
+    embed = discord.Embed(title="✅ Rôle ajouté", description=f"Le rôle **{role_name}** a été ajouté à **{membre.display_name}** !", color=discord.Color.green())
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
+@bot.command()
+@commands.has_permissions(manage_roles=True)
+async def removerole(ctx, membre: discord.Member = None, *, role_name: str = None):
+    if membre is None or role_name is None:
+        await ctx.send("❌ Usage : `!removerole @membre <nom du rôle>`")
+        return
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if not role:
+        await ctx.send(f"❌ Le rôle **{role_name}** n'existe pas !")
+        return
+    await membre.remove_roles(role)
+    embed = discord.Embed(title="✅ Rôle retiré", description=f"Le rôle **{role_name}** a été retiré à **{membre.display_name}** !", color=discord.Color.orange())
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
 
 # ===== MENUS ROLES =====
 
@@ -509,6 +744,10 @@ async def classement(ctx):
 async def on_ready():
     bot.add_view(SetupView())
     bot.add_view(JoindreView())
+    rappel_casino.start()
+    rappel_game.start()
+    await rappel_casino()
+    await rappel_game()
     print(f"✅ {bot.user} est en ligne !")
 
 bot.run(os.environ.get("TOKEN"))
