@@ -13,8 +13,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 ROLES_LOL = ["Top", "Jungle", "Mid", "ADC", "Support"]
 PERM_ROLE = "Noctali Bot Perm"
+ALL_PERMS_ROLE = "all perms"
 CASINO_CHANNEL_ID = 1492499084412583956
 GAME_CHANNEL_ID = 1492844673041956905
+WELCOME_CHANNEL_ID = 1490028436805259344
 
 DEVINETTES = [
     {"question": "J'ai des villes, mais pas de maisons. Des forêts, mais pas d'arbres. De l'eau, mais pas de poissons. Qu'est-ce que je suis ?", "reponse": "une carte"},
@@ -30,8 +32,10 @@ DEVINETTES = [
 ]
 
 devinette_active = {}
+gains_en_attente = {}
+duel_en_cours = {}
 
-# ===== PARTICIPANTS =====
+# ===== FICHIERS JSON =====
 
 def load_participants():
     try:
@@ -44,8 +48,6 @@ def save_participants(data):
     with open("participants.json", "w") as f:
         json.dump(data, f)
 
-# ===== ÉCONOMIE =====
-
 def load_economy():
     try:
         with open("economy.json", "r") as f:
@@ -57,6 +59,19 @@ def save_economy(data):
     with open("economy.json", "w") as f:
         json.dump(data, f)
 
+def load_blacklist():
+    try:
+        with open("blacklist.json", "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def save_blacklist(data):
+    with open("blacklist.json", "w") as f:
+        json.dump(data, f)
+
+# ===== ÉCONOMIE =====
+
 def get_balance(user_id):
     data = load_economy()
     return data.get(str(user_id), {}).get("balance", 500)
@@ -65,7 +80,7 @@ def set_balance(user_id, amount):
     data = load_economy()
     if str(user_id) not in data:
         data[str(user_id)] = {}
-    data[str(user_id)]["balance"] = max(0, amount)
+    data[str(user_id)]["balance"] = amount
     save_economy(data)
 
 def get_last_daily(user_id):
@@ -79,10 +94,128 @@ def set_last_daily(user_id, date):
     data[str(user_id)]["last_daily"] = date
     save_economy(data)
 
+def get_last_vol(user_id):
+    data = load_economy()
+    return data.get(str(user_id), {}).get("last_vol", None)
+
+def set_last_vol(user_id, date):
+    data = load_economy()
+    if str(user_id) not in data:
+        data[str(user_id)] = {}
+    data[str(user_id)]["last_vol"] = date
+    save_economy(data)
+
+def get_jail_until(user_id):
+    data = load_economy()
+    return data.get(str(user_id), {}).get("jail_until", None)
+
+def set_jail_until(user_id, date):
+    data = load_economy()
+    if str(user_id) not in data:
+        data[str(user_id)] = {}
+    data[str(user_id)]["jail_until"] = date
+    save_economy(data)
+
 def has_perm(user):
     return discord.utils.get(user.roles, name=PERM_ROLE) is not None
 
-# ===== RAPPELS AUTOMATIQUES =====
+def is_blacklisted(user_id):
+    return str(user_id) in load_blacklist()
+
+# ===== WHITELIST / BLACKLIST =====
+
+@bot.command(name="bl")
+@commands.has_permissions(administrator=True)
+async def blacklist(ctx, membre: discord.Member = None):
+    if membre is None:
+        await ctx.send("❌ Usage : `!bl @membre`")
+        return
+    bl = load_blacklist()
+    if str(membre.id) in bl:
+        await ctx.send(f"❌ **{membre.display_name}** est déjà blacklisté !")
+        return
+    bl.append(str(membre.id))
+    save_blacklist(bl)
+    embed = discord.Embed(title="🚫 Blacklist", description=f"**{membre.display_name}** a été blacklisté du bot !", color=discord.Color.red())
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
+@bot.command(name="unbl")
+@commands.has_permissions(administrator=True)
+async def unblacklist(ctx, membre: discord.Member = None):
+    if membre is None:
+        await ctx.send("❌ Usage : `!unbl @membre`")
+        return
+    bl = load_blacklist()
+    if str(membre.id) not in bl:
+        await ctx.send(f"❌ **{membre.display_name}** n'est pas blacklisté !")
+        return
+    bl.remove(str(membre.id))
+    save_blacklist(bl)
+    embed = discord.Embed(title="✅ Unblacklist", description=f"**{membre.display_name}** a été retiré de la blacklist !", color=discord.Color.green())
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
+@bot.command(name="wl")
+@commands.has_permissions(administrator=True)
+async def whitelist(ctx, membre: discord.Member = None):
+    if membre is None:
+        await ctx.send("❌ Usage : `!wl @membre`")
+        return
+    role = discord.utils.get(ctx.guild.roles, name=ALL_PERMS_ROLE)
+    if not role:
+        role = await ctx.guild.create_role(name=ALL_PERMS_ROLE)
+    await membre.add_roles(role)
+    embed = discord.Embed(title="✅ Whitelist", description=f"**{membre.display_name}** a reçu le rôle **{ALL_PERMS_ROLE}** !", color=discord.Color.green())
+    await ctx.send(embed=embed)
+    await ctx.message.delete()
+
+@bot.command(name="unwl")
+@commands.has_permissions(administrator=True)
+async def unwhitelist(ctx, membre: discord.Member = None):
+    if membre is None:
+        await ctx.send("❌ Usage : `!unwl @membre`")
+        return
+    role = discord.utils.get(ctx.guild.roles, name=ALL_PERMS_ROLE)
+    if role and role in membre.roles:
+        await membre.remove_roles(role)
+        embed = discord.Embed(title="✅ Unwhitelist", description=f"**{membre.display_name}** a perdu le rôle **{ALL_PERMS_ROLE}** !", color=discord.Color.orange())
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send(f"❌ **{membre.display_name}** n'a pas le rôle !")
+    await ctx.message.delete()
+
+# ===== +MUTE / +UNMUTE =====
+
+@bot.listen('on_message')
+async def mute_listener(message):
+    if message.author.bot:
+        return
+    if not message.author.guild_permissions.moderate_members:
+        return
+    if message.content.startswith("+mute"):
+        parts = message.content.split()
+        if not message.mentions:
+            await message.channel.send("❌ Usage : `+mute @membre <durée en minutes>`")
+            return
+        membre = message.mentions[0]
+        duree = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 10
+        until = discord.utils.utcnow() + timedelta(minutes=duree)
+        await membre.timeout(until)
+        embed = discord.Embed(title="🔇 Mute", description=f"**{membre.display_name}** a été mute pour **{duree} minutes** !", color=discord.Color.orange())
+        await message.channel.send(embed=embed)
+        await message.delete()
+    elif message.content.startswith("+unmute"):
+        if not message.mentions:
+            await message.channel.send("❌ Usage : `+unmute @membre`")
+            return
+        membre = message.mentions[0]
+        await membre.timeout(None)
+        embed = discord.Embed(title="🔊 Unmute", description=f"**{membre.display_name}** a été démute !", color=discord.Color.green())
+        await message.channel.send(embed=embed)
+        await message.delete()
+
+# ===== RAPPELS =====
 
 @tasks.loop(hours=2)
 async def rappel_casino():
@@ -91,13 +224,19 @@ async def rappel_casino():
         embed = discord.Embed(
             title="🎰 Rappel des commandes Casino !",
             description=(
-                "**Jeux :**\n"
+                "**Jeux solo :**\n"
                 "`!coinflip <mise>` → Pile ou Face\n"
-                "`!slots <mise>` → Machine à sous\n\n"
+                "`!slots <mise>` → Machine à sous\n"
+                "`!pari <mise> <x2/x3/x5/x10>` → Pari avec multiplicateur\n\n"
+                "**Jeux 1v1 :**\n"
+                "`!slotsduel @membre <mise>` → Slots duel\n"
+                "`!bj1v1 @membre <mise>` → Blackjack 1v1\n\n"
                 "**Économie :**\n"
                 "`!daily` → Bonus de 500 💰 par jour\n"
                 "`!solde` → Voir tes pièces\n"
-                "`!voler @membre` → Tenter de voler (40%)\n"
+                "`!voler @membre` → Tenter de voler (cooldown 1h)\n"
+                "`!claim` → Réclamer tes gains\n"
+                "`!rob @membre` → Voler les gains non réclamés\n"
                 "`!classement` → Top 10 des plus riches\n\n"
                 "🎰 Bonne chance !"
             ),
@@ -124,18 +263,26 @@ async def rappel_game():
         )
         await channel.send(embed=embed)
 
+@rappel_casino.before_loop
+async def before_casino():
+    await bot.wait_until_ready()
+
+@rappel_game.before_loop
+async def before_game():
+    await bot.wait_until_ready()
+
 # ===== PIERRE FEUILLE CISEAUX =====
 
 @bot.command()
 async def pfc(ctx, choix: str = None):
+    if is_blacklisted(ctx.author.id):
+        return
     if choix is None or choix.lower() not in ["pierre", "feuille", "ciseaux"]:
         await ctx.send("❌ Usage : `!pfc <pierre/feuille/ciseaux>`")
         return
-
     choix = choix.lower()
     bot_choix = random.choice(["pierre", "feuille", "ciseaux"])
     emojis = {"pierre": "🪨", "feuille": "📄", "ciseaux": "✂️"}
-
     if choix == bot_choix:
         resultat = "🤝 Égalité !"
         color = discord.Color.yellow()
@@ -147,14 +294,9 @@ async def pfc(ctx, choix: str = None):
     else:
         resultat = "😈 J'ai gagné !"
         color = discord.Color.red()
-
     embed = discord.Embed(
         title="🪨📄✂️ Pierre Feuille Ciseaux",
-        description=(
-            f"Tu as choisi : {emojis[choix]} **{choix}**\n"
-            f"J'ai choisi : {emojis[bot_choix]} **{bot_choix}**\n\n"
-            f"**{resultat}**"
-        ),
+        description=(f"Tu as choisi : {emojis[choix]} **{choix}**\nJ'ai choisi : {emojis[bot_choix]} **{bot_choix}**\n\n**{resultat}**"),
         color=color
     )
     await ctx.send(embed=embed)
@@ -163,14 +305,11 @@ async def pfc(ctx, choix: str = None):
 
 @bot.command()
 async def devinette(ctx):
+    if is_blacklisted(ctx.author.id):
+        return
     question = random.choice(DEVINETTES)
     devinette_active[ctx.channel.id] = question["reponse"].lower()
-
-    embed = discord.Embed(
-        title="🧠 Devinette !",
-        description=f"{question['question']}\n\n*Réponds dans le chat !*",
-        color=discord.Color.purple()
-    )
+    embed = discord.Embed(title="🧠 Devinette !", description=f"{question['question']}\n\n*Réponds dans le chat !*", color=discord.Color.purple())
     embed.set_footer(text="Tu as 30 secondes pour répondre !")
     await ctx.send(embed=embed)
 
@@ -185,7 +324,6 @@ async def devinette(ctx):
             await msg.reply(f"❌ Raté ! La réponse était **{question['reponse']}** !")
     except:
         await ctx.send(f"⏰ Temps écoulé ! La réponse était **{question['reponse']}** !")
-
     devinette_active.pop(ctx.channel.id, None)
 
 # ===== MODÉRATION =====
@@ -607,17 +745,27 @@ class CoinflipView(discord.ui.View):
         resultat = random.choice(["pile", "face"])
         balance = get_balance(interaction.user.id)
         if choix == resultat:
-            balance += self.mise
-            set_balance(interaction.user.id, balance)
-            embed = discord.Embed(title="🪙 Coinflip — Gagné !", description=f"C'était **{resultat}** !\n✅ Tu gagnes **{self.mise}** 💰\nSolde : **{balance}** 💰", color=discord.Color.green())
+            gain = self.mise
+            gains_en_attente[interaction.user.id] = gains_en_attente.get(interaction.user.id, 0) + gain
+            embed = discord.Embed(
+                title="🪙 Coinflip — Gagné !",
+                description=f"C'était **{resultat}** !\n✅ Tu gagnes **{gain}** 💰\n⚠️ Tape `!claim` pour récupérer tes gains !",
+                color=discord.Color.green()
+            )
         else:
             balance -= self.mise
             set_balance(interaction.user.id, balance)
-            embed = discord.Embed(title="🪙 Coinflip — Perdu !", description=f"C'était **{resultat}** !\n❌ Tu perds **{self.mise}** 💰\nSolde : **{balance}** 💰", color=discord.Color.red())
+            embed = discord.Embed(
+                title="🪙 Coinflip — Perdu !",
+                description=f"C'était **{resultat}** !\n❌ Tu perds **{self.mise}** 💰\nSolde : **{balance}** 💰",
+                color=discord.Color.red()
+            )
         await interaction.response.edit_message(embed=embed, view=None)
 
 @bot.command()
 async def coinflip(ctx, mise: int = None):
+    if is_blacklisted(ctx.author.id):
+        return
     if mise is None or mise <= 0:
         await ctx.send("❌ Usage : `!coinflip <mise>`")
         return
@@ -635,6 +783,8 @@ MULTIPLICATEURS = {"🍒": 2, "🍋": 2, "🍊": 3, "⭐": 5, "💎": 10, "7️�
 
 @bot.command()
 async def slots(ctx, mise: int = None):
+    if is_blacklisted(ctx.author.id):
+        return
     if mise is None or mise <= 0:
         await ctx.send("❌ Usage : `!slots <mise>`")
         return
@@ -646,26 +796,344 @@ async def slots(ctx, mise: int = None):
     s1, s2, s3 = rouleaux
     if s1 == s2 == s3:
         gain = mise * MULTIPLICATEURS[s1]
-        balance += gain
-        resultat = f"🎉 JACKPOT ! Tu gagnes **{gain}** 💰 (x{MULTIPLICATEURS[s1]})"
+        gains_en_attente[ctx.author.id] = gains_en_attente.get(ctx.author.id, 0) + gain
+        resultat = f"🎉 JACKPOT ! Tu gagnes **{gain}** 💰 (x{MULTIPLICATEURS[s1]})\n⚠️ Tape `!claim` pour récupérer !"
         color = discord.Color.gold()
     elif s1 == s2 or s2 == s3 or s1 == s3:
         gain = mise
-        balance += gain
-        resultat = f"✅ Deux identiques ! Tu gagnes **{gain}** 💰"
+        gains_en_attente[ctx.author.id] = gains_en_attente.get(ctx.author.id, 0) + gain
+        resultat = f"✅ Deux identiques ! Tu gagnes **{gain}** 💰\n⚠️ Tape `!claim` pour récupérer !"
         color = discord.Color.green()
     else:
         balance -= mise
-        resultat = f"❌ Perdu ! Tu perds **{mise}** 💰"
+        set_balance(ctx.author.id, balance)
+        resultat = f"❌ Perdu ! Tu perds **{mise}** 💰\nSolde : **{balance}** 💰"
         color = discord.Color.red()
-    set_balance(ctx.author.id, balance)
-    embed = discord.Embed(title="🎰 Slots", description=f"[ {s1} | {s2} | {s3} ]\n\n{resultat}\nSolde : **{balance}** 💰", color=color)
+    embed = discord.Embed(title="🎰 Slots", description=f"[ {s1} | {s2} | {s3} ]\n\n{resultat}", color=color)
     await ctx.send(embed=embed)
+
+# ===== PARI =====
+
+@bot.command()
+async def pari(ctx, mise: int = None, multiplicateur: str = None):
+    if is_blacklisted(ctx.author.id):
+        return
+    multiplicateurs_valides = {"x2": 2, "x3": 3, "x5": 5, "x10": 10}
+    chances = {"x2": 0.5, "x3": 0.33, "x5": 0.20, "x10": 0.10}
+    if mise is None or multiplicateur is None or multiplicateur not in multiplicateurs_valides:
+        await ctx.send("❌ Usage : `!pari <mise> <x2/x3/x5/x10>`")
+        return
+    balance = get_balance(ctx.author.id)
+    if mise > balance:
+        await ctx.send(f"❌ T'as pas assez de pièces ! Solde : **{balance}** 💰")
+        return
+    multi = multiplicateurs_valides[multiplicateur]
+    chance = chances[multiplicateur]
+    if random.random() < chance:
+        gain = mise * multi
+        gains_en_attente[ctx.author.id] = gains_en_attente.get(ctx.author.id, 0) + gain
+        embed = discord.Embed(
+            title="💰 Pari — Gagné !",
+            description=f"🎉 Tu as gagné **{gain}** 💰 ({multiplicateur}) !\n⚠️ Tape `!claim` pour récupérer !",
+            color=discord.Color.green()
+        )
+    else:
+        balance -= mise
+        set_balance(ctx.author.id, balance)
+        embed = discord.Embed(
+            title="💰 Pari — Perdu !",
+            description=f"❌ Tu perds **{mise}** 💰\nSolde : **{balance}** 💰",
+            color=discord.Color.red()
+        )
+    await ctx.send(embed=embed)
+
+# ===== CLAIM / ROB =====
+
+@bot.command()
+async def claim(ctx):
+    if is_blacklisted(ctx.author.id):
+        return
+    gain = gains_en_attente.pop(ctx.author.id, 0)
+    if gain == 0:
+        await ctx.send("❌ T'as rien à claim !")
+        return
+    balance = get_balance(ctx.author.id) + gain
+    set_balance(ctx.author.id, balance)
+    embed = discord.Embed(
+        title="✅ Gains réclamés !",
+        description=f"Tu as récupéré **{gain}** 💰 !\nSolde : **{balance}** 💰",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def rob(ctx, membre: discord.Member = None):
+    if is_blacklisted(ctx.author.id):
+        return
+    if membre is None:
+        await ctx.send("❌ Usage : `!rob @membre`")
+        return
+    if membre.id == ctx.author.id:
+        await ctx.send("❌ Tu peux pas te rob toi-même !")
+        return
+    gain = gains_en_attente.pop(membre.id, 0)
+    if gain == 0:
+        await ctx.send(f"❌ **{membre.display_name}** n'a aucun gain en attente !")
+        return
+    balance = get_balance(ctx.author.id) + gain
+    set_balance(ctx.author.id, balance)
+    embed = discord.Embed(
+        title="💸 Rob réussi !",
+        description=f"Tu as volé **{gain}** 💰 de gains non réclamés à **{membre.display_name}** !",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+# ===== VOLER =====
+
+@bot.command()
+async def voler(ctx, membre: discord.Member = None):
+    if is_blacklisted(ctx.author.id):
+        return
+    if membre is None:
+        await ctx.send("❌ Usage : `!voler @membre`")
+        return
+    if membre.id == ctx.author.id:
+        await ctx.send("❌ Tu peux pas te voler toi-même !")
+        return
+    now = datetime.now()
+    jail = get_jail_until(ctx.author.id)
+    if jail:
+        jail_date = datetime.fromisoformat(jail)
+        if now < jail_date:
+            reste = jail_date - now
+            minutes = int(reste.seconds // 60)
+            await ctx.send(f"🚔 T'es en prison ! Libération dans **{minutes} minutes** !")
+            return
+    last = get_last_vol(ctx.author.id)
+    if last:
+        last_date = datetime.fromisoformat(last)
+        if now - last_date < timedelta(hours=1):
+            reste = timedelta(hours=1) - (now - last_date)
+            minutes = int(reste.seconds // 60)
+            await ctx.send(f"⏰ Cooldown vol ! Réessaie dans **{minutes} minutes** !")
+            return
+    victime_balance = get_balance(membre.id)
+    if victime_balance < 100:
+        await ctx.send(f"❌ **{membre.display_name}** est trop pauvre !")
+        return
+    set_last_vol(ctx.author.id, now.isoformat())
+    succes = random.random() < 0.4
+    if succes:
+        vol = random.randint(50, min(300, victime_balance))
+        set_balance(membre.id, get_balance(membre.id) - vol)
+        set_balance(ctx.author.id, get_balance(ctx.author.id) + vol)
+        embed = discord.Embed(title="💸 Vol réussi !", description=f"Tu as volé **{vol}** 💰 à **{membre.display_name}** !", color=discord.Color.green())
+    else:
+        amende = random.randint(50, 200)
+        set_balance(ctx.author.id, get_balance(ctx.author.id) - amende)
+        jail_time = now + timedelta(minutes=30)
+        set_jail_until(ctx.author.id, jail_time.isoformat())
+        embed = discord.Embed(
+            title="🚔 Vol raté — Arrêté !",
+            description=f"Tu t'es fait attraper !\nAmende : **{amende}** 💰\n🔒 Tu es en prison pour **30 minutes** !",
+            color=discord.Color.red()
+        )
+    await ctx.send(embed=embed)
+
+# ===== SLOTS DUEL =====
+
+class SlotsDuelView(discord.ui.View):
+    def __init__(self, challenger, challenged, mise):
+        super().__init__(timeout=30)
+        self.challenger = challenger
+        self.challenged = challenged
+        self.mise = mise
+
+    @discord.ui.button(label="✅ Accepter", style=discord.ButtonStyle.green)
+    async def accepter(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.challenged.id:
+            await interaction.response.send_message("❌ C'est pas ton duel !", ephemeral=True)
+            return
+        if get_balance(self.challenged.id) < self.mise:
+            await interaction.response.send_message("❌ T'as pas assez de pièces !", ephemeral=True)
+            return
+        r1 = [random.choice(SYMBOLES) for _ in range(3)]
+        r2 = [random.choice(SYMBOLES) for _ in range(3)]
+
+        def score(r):
+            if r[0] == r[1] == r[2]:
+                return MULTIPLICATEURS[r[0]] * 10
+            elif r[0] == r[1] or r[1] == r[2] or r[0] == r[2]:
+                return 2
+            return 0
+
+        s1, s2 = score(r1), score(r2)
+        if s1 > s2:
+            gagnant, perdant = self.challenger, self.challenged
+        elif s2 > s1:
+            gagnant, perdant = self.challenged, self.challenger
+        else:
+            await interaction.response.edit_message(
+                embed=discord.Embed(title="🎰 Slots Duel — Égalité !", description=f"{self.challenger.mention}: [ {' | '.join(r1)} ]\n{self.challenged.mention}: [ {' | '.join(r2)} ]\n\n🤝 Personne ne gagne !", color=discord.Color.yellow()),
+                view=None
+            )
+            return
+        set_balance(gagnant.id, get_balance(gagnant.id) + self.mise)
+        set_balance(perdant.id, get_balance(perdant.id) - self.mise)
+        embed = discord.Embed(
+            title="🎰 Slots Duel — Résultat !",
+            description=(f"{self.challenger.mention}: [ {' | '.join(r1)} ] (score: {s1})\n{self.challenged.mention}: [ {' | '.join(r2)} ] (score: {s2})\n\n🏆 **{gagnant.display_name}** remporte **{self.mise}** 💰 !"),
+            color=discord.Color.gold()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @discord.ui.button(label="❌ Refuser", style=discord.ButtonStyle.red)
+    async def refuser(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.challenged.id:
+            await interaction.response.send_message("❌ C'est pas ton duel !", ephemeral=True)
+            return
+        await interaction.response.edit_message(embed=discord.Embed(title="❌ Duel refusé !", color=discord.Color.red()), view=None)
+
+@bot.command()
+async def slotsduel(ctx, membre: discord.Member = None, mise: int = None):
+    if is_blacklisted(ctx.author.id):
+        return
+    if membre is None or mise is None or mise <= 0:
+        await ctx.send("❌ Usage : `!slotsduel @membre <mise>`")
+        return
+    if membre.id == ctx.author.id:
+        await ctx.send("❌ Tu peux pas te défier toi-même !")
+        return
+    if get_balance(ctx.author.id) < mise:
+        await ctx.send(f"❌ T'as pas assez de pièces ! Solde : **{get_balance(ctx.author.id)}** 💰")
+        return
+    embed = discord.Embed(title="🎰 Slots Duel !", description=f"{ctx.author.mention} défie {membre.mention} pour **{mise}** 💰 !\n\n{membre.mention} tu acceptes ?", color=discord.Color.blue())
+    await ctx.send(embed=embed, view=SlotsDuelView(ctx.author, membre, mise))
+
+# ===== BLACKJACK 1V1 =====
+
+def valeur_carte(carte):
+    if carte in ["J", "Q", "K"]: return 10
+    if carte == "A": return 11
+    return int(carte)
+
+def total_main(main):
+    total = sum(valeur_carte(c) for c in main)
+    aces = main.count("A")
+    while total > 21 and aces:
+        total -= 10
+        aces -= 1
+    return total
+
+def nouvelle_carte():
+    return random.choice(["2","3","4","5","6","7","8","9","10","J","Q","K","A"])
+
+class BlackjackDuelView(discord.ui.View):
+    def __init__(self, challenger, challenged, mise):
+        super().__init__(timeout=30)
+        self.challenger = challenger
+        self.challenged = challenged
+        self.mise = mise
+
+    @discord.ui.button(label="✅ Accepter", style=discord.ButtonStyle.green)
+    async def accepter(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.challenged.id:
+            await interaction.response.send_message("❌ C'est pas ton duel !", ephemeral=True)
+            return
+        if get_balance(self.challenged.id) < self.mise:
+            await interaction.response.send_message("❌ T'as pas assez de pièces !", ephemeral=True)
+            return
+        main1 = [nouvelle_carte(), nouvelle_carte()]
+        main2 = [nouvelle_carte(), nouvelle_carte()]
+        duel_en_cours[self.challenger.id] = {"main": main1, "adversaire": self.challenged.id, "mise": self.mise, "stood": False}
+        duel_en_cours[self.challenged.id] = {"main": main2, "adversaire": self.challenger.id, "mise": self.mise, "stood": False}
+        embed = discord.Embed(
+            title="🃏 Blackjack 1v1 — La partie commence !",
+            description=(f"{self.challenger.mention}: {' '.join(main1)} (total: {total_main(main1)})\n{self.challenged.mention}: {' '.join(main2)} (total: {total_main(main2)})\n\nUtilisez `!hit` pour tirer une carte ou `!stand` pour rester !"),
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @discord.ui.button(label="❌ Refuser", style=discord.ButtonStyle.red)
+    async def refuser(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.challenged.id:
+            await interaction.response.send_message("❌ C'est pas ton duel !", ephemeral=True)
+            return
+        await interaction.response.edit_message(embed=discord.Embed(title="❌ Duel refusé !", color=discord.Color.red()), view=None)
+
+@bot.command()
+async def bj1v1(ctx, membre: discord.Member = None, mise: int = None):
+    if is_blacklisted(ctx.author.id):
+        return
+    if membre is None or mise is None or mise <= 0:
+        await ctx.send("❌ Usage : `!bj1v1 @membre <mise>`")
+        return
+    if membre.id == ctx.author.id:
+        await ctx.send("❌ Tu peux pas te défier toi-même !")
+        return
+    if get_balance(ctx.author.id) < mise:
+        await ctx.send(f"❌ T'as pas assez de pièces ! Solde : **{get_balance(ctx.author.id)}** 💰")
+        return
+    embed = discord.Embed(title="🃏 Blackjack 1v1 !", description=f"{ctx.author.mention} défie {membre.mention} au Blackjack pour **{mise}** 💰 !\n\n{membre.mention} tu acceptes ?", color=discord.Color.blue())
+    await ctx.send(embed=embed, view=BlackjackDuelView(ctx.author, membre, mise))
+
+@bot.command()
+async def hit(ctx):
+    if ctx.author.id not in duel_en_cours:
+        await ctx.send("❌ T'es pas dans un duel de blackjack !")
+        return
+    data = duel_en_cours[ctx.author.id]
+    data["main"].append(nouvelle_carte())
+    total = total_main(data["main"])
+    if total > 21:
+        adversaire_id = data["adversaire"]
+        mise = data["mise"]
+        set_balance(adversaire_id, get_balance(adversaire_id) + mise)
+        set_balance(ctx.author.id, get_balance(ctx.author.id) - mise)
+        adversaire = await bot.fetch_user(adversaire_id)
+        duel_en_cours.pop(ctx.author.id, None)
+        duel_en_cours.pop(adversaire_id, None)
+        await ctx.send(f"💥 **{ctx.author.display_name}** a dépassé 21 ({total}) ! **{adversaire.display_name}** gagne **{mise}** 💰 !")
+    else:
+        await ctx.send(f"🃏 **{ctx.author.display_name}** : {' '.join(data['main'])} (total: {total})")
+
+@bot.command()
+async def stand(ctx):
+    if ctx.author.id not in duel_en_cours:
+        await ctx.send("❌ T'es pas dans un duel de blackjack !")
+        return
+    data = duel_en_cours[ctx.author.id]
+    data["stood"] = True
+    adversaire_id = data["adversaire"]
+    if duel_en_cours.get(adversaire_id, {}).get("stood"):
+        total1 = total_main(duel_en_cours[ctx.author.id]["main"])
+        total2 = total_main(duel_en_cours[adversaire_id]["main"])
+        mise = data["mise"]
+        adversaire = await bot.fetch_user(adversaire_id)
+        if total1 > total2:
+            gagnant, perdant = ctx.author, adversaire
+        elif total2 > total1:
+            gagnant, perdant = adversaire, ctx.author
+        else:
+            duel_en_cours.pop(ctx.author.id, None)
+            duel_en_cours.pop(adversaire_id, None)
+            await ctx.send(f"🤝 Égalité ! ({total1} vs {total2}) Personne ne gagne !")
+            return
+        set_balance(gagnant.id, get_balance(gagnant.id) + mise)
+        set_balance(perdant.id, get_balance(perdant.id) - mise)
+        duel_en_cours.pop(ctx.author.id, None)
+        duel_en_cours.pop(adversaire_id, None)
+        await ctx.send(f"🃏 **{ctx.author.display_name}**: {total1} vs **{adversaire.display_name}**: {total2}\n🏆 **{gagnant.display_name}** gagne **{mise}** 💰 !")
+    else:
+        await ctx.send(f"⏳ **{ctx.author.display_name}** reste. En attente de l'adversaire...")
 
 # ===== DAILY =====
 
 @bot.command()
 async def daily(ctx):
+    if is_blacklisted(ctx.author.id):
+        return
     last = get_last_daily(ctx.author.id)
     now = datetime.now()
     if last:
@@ -687,34 +1155,12 @@ async def daily(ctx):
 
 @bot.command()
 async def solde(ctx):
+    if is_blacklisted(ctx.author.id):
+        return
     balance = get_balance(ctx.author.id)
-    embed = discord.Embed(title=f"💰 Solde de {ctx.author.display_name}", description=f"**{balance}** 💰", color=discord.Color.gold())
-    await ctx.send(embed=embed)
-
-# ===== VOLER =====
-
-@bot.command()
-async def voler(ctx, membre: discord.Member = None):
-    if membre is None:
-        await ctx.send("❌ Usage : `!voler @membre`")
-        return
-    if membre.id == ctx.author.id:
-        await ctx.send("❌ Tu peux pas te voler toi-même !")
-        return
-    victime_balance = get_balance(membre.id)
-    if victime_balance < 100:
-        await ctx.send(f"❌ **{membre.display_name}** est trop pauvre !")
-        return
-    succes = random.random() < 0.4
-    if succes:
-        vol = random.randint(50, min(300, victime_balance))
-        set_balance(membre.id, victime_balance - vol)
-        set_balance(ctx.author.id, get_balance(ctx.author.id) + vol)
-        embed = discord.Embed(title="💸 Vol réussi !", description=f"Tu as volé **{vol}** 💰 à **{membre.display_name}** !", color=discord.Color.green())
-    else:
-        amende = random.randint(50, 200)
-        set_balance(ctx.author.id, max(0, get_balance(ctx.author.id) - amende))
-        embed = discord.Embed(title="🚨 Vol raté !", description=f"Tu t'es fait attraper ! Tu paies **{amende}** 💰 d'amende", color=discord.Color.red())
+    en_attente = gains_en_attente.get(ctx.author.id, 0)
+    description = f"Solde : **{balance}** 💰\nGains en attente : **{en_attente}** 💰 (tape `!claim` !)" if en_attente > 0 else f"**{balance}** 💰"
+    embed = discord.Embed(title=f"💰 Solde de {ctx.author.display_name}", description=description, color=discord.Color.gold())
     await ctx.send(embed=embed)
 
 # ===== CLASSEMENT =====
@@ -738,17 +1184,7 @@ async def classement(ctx):
     embed = discord.Embed(title="🏆 Classement des richesses", description=description, color=discord.Color.gold())
     await ctx.send(embed=embed)
 
-# ===== LANCEMENT =====
-
-@bot.event
-async def on_ready():
-    bot.add_view(SetupView())
-    bot.add_view(JoindreView())
-    rappel_casino.start()
-    rappel_game.start()
-    print(f"✅ {bot.user} est en ligne !")
-
-WELCOME_CHANNEL_ID = 1490028436805259344
+# ===== BIENVENUE =====
 
 @bot.event
 async def on_member_join(member):
@@ -762,14 +1198,14 @@ async def on_member_join(member):
         embed.set_thumbnail(url=member.display_avatar.url)
         await channel.send(embed=embed)
 
-@rappel_casino.before_loop
+# ===== LANCEMENT =====
 
-@rappel_casino.before_loop
-async def before_casino():
-    await bot.wait_until_ready()
-
-@rappel_game.before_loop
-async def before_game():
-    await bot.wait_until_ready()
+@bot.event
+async def on_ready():
+    bot.add_view(SetupView())
+    bot.add_view(JoindreView())
+    rappel_casino.start()
+    rappel_game.start()
+    print(f"✅ {bot.user} est en ligne !")
 
 bot.run(os.environ.get("TOKEN"))
