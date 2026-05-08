@@ -215,7 +215,6 @@ async def mute_listener(message):
         await message.channel.send(embed=embed)
         await message.delete()
 
-# ===== RAPPELS =====
 
 @tasks.loop(hours=2)
 async def rappel_casino():
